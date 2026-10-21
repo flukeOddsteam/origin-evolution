@@ -11,7 +11,25 @@ import { DAY_TICKS } from "./render.js";
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const LAND_SCALE = 360, SEA_SCALE = 170; // vertical exaggeration above / below sea level
-const CAP = { sph: 16000, ico: 9000, cone: 9000, cyl: 18000, box: 7000, tet: 3000, torus: 600 };
+const CAP = { sph: 16000, ico: 12000, cone: 10000, cyl: 20000, box: 8000, tet: 3000, torus: 600 };
+// planet ("globe") mode: the flat world is wrapped round a small sphere floating in space
+export const PLANET_R = WORLD_W / TAU;          // equator length = world width, so x keeps its scale
+const LAT_SPAN = Math.PI * 0.86;               // the map covers this band of latitude; ice caps close the poles
+const GLOBE_VS = 0.12;                         // relief exaggeration on the planet (mountains stay readable from orbit)
+const SOUTH_K = (PLANET_R * LAT_SPAN) / WORLD_H; // surface distance per world unit north-south
+const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const wrapDX = (dx) => (dx > WORLD_W / 2 ? dx - WORLD_W : dx < -WORLD_W / 2 ? dx + WORLD_W : dx);
+
+const ATMO_VS = `varying vec3 vN; varying vec3 vV; varying vec3 vW;
+void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+vW = normalize((modelMatrix * vec4(position, 1.0)).xyz); gl_Position = projectionMatrix * mv; }`;
+const ATMO_FS = `uniform vec3 col; uniform vec3 sun; uniform float pw; uniform float k; uniform float inner; uniform float gain;
+varying vec3 vN; varying vec3 vV; varying vec3 vW;
+void main(){ float d = dot(vN, vV);
+float f = inner > 0.5 ? pow(clamp(1.0 - d, 0.0, 1.0), pw) : pow(clamp(-d / k, 0.0, 1.0), pw);
+float lit = 0.18 + 0.82 * smoothstep(-0.3, 0.45, dot(vW, sun));
+vec3 c = mix(vec3(1.0, 0.55, 0.35), col, smoothstep(-0.1, 0.35, dot(vW, sun)));
+gl_FragColor = vec4(c * f * lit * gain, f * lit * gain); }`;
 
 export function webglAvailable() {
   if (typeof THREE === "undefined") return false;
@@ -32,6 +50,9 @@ export class Renderer3D {
     this._m = new THREE.Matrix4(); this._b = new THREE.Matrix4(); this._l = new THREE.Matrix4(); this._t = new THREE.Matrix4();
     this._q = new THREE.Quaternion(); this._e = new THREE.Euler(); this._p = new THREE.Vector3(); this._s = new THREE.Vector3(); this._one = new THREE.Vector3(1, 1, 1);
     this._c = new THREE.Color(); this._anim = { x: 0, y: 0, z: 0, px: 0, py: 0, pz: 0 };
+    this._fm = new THREE.Matrix4(); this._fq = new THREE.Quaternion(); this._gp = new THREE.Vector3(); this._n = new THREE.Vector3();
+    this._e1 = new THREE.Vector3(); this._u1 = new THREE.Vector3(); this._s1 = new THREE.Vector3(); this._h1 = new THREE.Vector3(); this._d1 = new THREE.Vector3();
+    this.globe = false; this.vs = 1; this.sunDir = new THREE.Vector3(1, 0.2, 0).normalize();
     this.raycaster = new THREE.Raycaster();
     this.buildStatic();
     this.setSim(sim);
@@ -65,7 +86,7 @@ export class Renderer3D {
     this.water = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_W * 3, WORLD_H * 3, 1, 1), new THREE.MeshPhongMaterial({ color: 0x2c7fb3, transparent: true, opacity: 0.6, shininess: 90, specular: 0x88bbdd }));
     this.water.rotation.x = -Math.PI / 2; this.water.position.set(WORLD_W / 2, 0, WORLD_H / 2); S.add(this.water);
 
-    this.cloudMesh = new THREE.InstancedMesh(this.geos.ico, new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.82 }), 900);
+    this.cloudMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 7), new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x3a4250, transparent: true, opacity: 0.82 }), 3200);
     this.cloudMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); this.cloudMesh.frustumCulled = false; this.cloudMesh.count = 0; S.add(this.cloudMesh);
 
     const rg = new THREE.BufferGeometry(); this.rainPos = new Float32Array(1800 * 3); rg.setAttribute("position", new THREE.BufferAttribute(this.rainPos, 3));
@@ -74,7 +95,92 @@ export class Renderer3D {
     this.rainSeed = Array.from({ length: 1800 }, () => [Math.random(), Math.random(), Math.random()]);
 
     this.ring = new THREE.Mesh(new THREE.RingGeometry(1, 1.25, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false }));
-    this.ring.rotation.x = -Math.PI / 2; this.ring.renderOrder = 10; this.ring.visible = false; S.add(this.ring);
+    this.ring.renderOrder = 10; this.ring.visible = false; this.ring.matrixAutoUpdate = false; S.add(this.ring);
+    this.buildSpace();
+  }
+
+  /** Planet-mode scenery: ocean sphere, ice caps, atmosphere glow, stars, sun and moon. */
+  buildSpace() {
+    const S = this.scene, R = PLANET_R;
+    this.space = new THREE.Group(); this.space.visible = false; S.add(this.space);
+    this.ocean = new THREE.Mesh(new THREE.SphereGeometry(R, 96, 64), new THREE.MeshPhongMaterial({ color: 0x2a86c8, transparent: true, opacity: 0.74, shininess: 160, specular: 0x30506a }));
+    this.space.add(this.ocean);
+    const capT = Math.PI / 2 - LAT_SPAN / 2 + 0.03, iceM = new THREE.MeshPhongMaterial({ color: 0xeef6ff, flatShading: true, shininess: 30 });
+    const north = new THREE.Mesh(new THREE.SphereGeometry(R + 1.6, 64, 6, 0, TAU, 0, capT), iceM);
+    const south = new THREE.Mesh(new THREE.SphereGeometry(R + 1.6, 64, 6, 0, TAU, Math.PI - capT, capT), iceM);
+    this.space.add(north, south);
+    const atmo = (radius, side, inner, pw, k, gain) => new THREE.Mesh(new THREE.SphereGeometry(radius, 64, 48), new THREE.ShaderMaterial({
+      uniforms: { col: { value: new THREE.Color(0x6cc8ff) }, sun: { value: this.sunDir }, pw: { value: pw }, k: { value: k }, inner: { value: inner }, gain: { value: gain } },
+      vertexShader: ATMO_VS, fragmentShader: ATMO_FS, side, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+    this.atmoOuter = atmo(R * 1.17, THREE.BackSide, 0, 2.2, Math.sqrt(1 - 1 / (1.17 * 1.17)), 1.15);
+    this.atmoInner = atmo(R + 2.4, THREE.FrontSide, 1, 3.2, 1, 0.9);
+    this.space.add(this.atmoOuter, this.atmoInner);
+    // starfield on a far shell
+    const N = 2600, sp = new Float32Array(N * 3), sc = new Float32Array(N * 3);
+    for (let k = 0; k < N; k++) {
+      const u = hash(k, 1, 91) * 2 - 1, a = hash(k, 2, 91) * TAU, r = Math.sqrt(1 - u * u), d = 5200;
+      sp[k * 3] = Math.cos(a) * r * d; sp[k * 3 + 1] = u * d; sp[k * 3 + 2] = Math.sin(a) * r * d;
+      const t = hash(k, 3, 91), b = 0.45 + hash(k, 4, 91) * 0.55;
+      sc[k * 3] = b * (t > 0.8 ? 0.75 : 1); sc[k * 3 + 1] = b * (t > 0.8 ? 0.85 : t < 0.15 ? 0.85 : 1); sc[k * 3 + 2] = b * (t < 0.15 ? 0.7 : 1);
+    }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute("position", new THREE.BufferAttribute(sp, 3)); sg.setAttribute("color", new THREE.BufferAttribute(sc, 3));
+    this.stars = new THREE.Points(sg, new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.95, depthWrite: false }));
+    this.space.add(this.stars);
+    // a distant sun with a halo and a small moon on an inclined orbit
+    this.sunBall = new THREE.Mesh(new THREE.SphereGeometry(70, 24, 16), new THREE.MeshBasicMaterial({ color: 0xfff2c4 }));
+    this.sunHalo = new THREE.Mesh(new THREE.SphereGeometry(190, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffc46a, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.moon = new THREE.Mesh(new THREE.IcosahedronGeometry(34, 1), new THREE.MeshPhongMaterial({ color: 0xb9b4ad, flatShading: true, shininess: 2 }));
+    this.space.add(this.sunBall, this.sunHalo, this.moon);
+  }
+
+  /** Switch between the flat 3D landscape and the round planet. */
+  setGlobe(on) {
+    on = !!on;
+    if (on === this.globe && this.terrain) return;
+    this.globe = on; this.vs = on ? GLOBE_VS : 1;
+    this.space.visible = on; this.water.visible = !on;
+    this.camera.near = on ? 0.8 : 2; this.camera.far = on ? 12000 : 8000; this.camera.updateProjectionMatrix();
+    if (on) { this.hemi.color.setHex(0x8fa8d8); this.hemi.groundColor.setHex(0x8fa8d8); }
+    else { this.hemi.color.setHex(0xcfe6ff); this.hemi.groundColor.setHex(0x4a3b28); }
+    if (this.sim) this.setSim(this.sim);
+    this.clampCam();
+  }
+
+  // ------------------------------------------------------------ planet mapping
+  /** Unit surface normal for world point (x, z). */
+  globeN(x, z, out) {
+    const lon = (x / WORLD_W) * TAU, lat = (0.5 - z / WORLD_H) * LAT_SPAN, cl = Math.cos(lat);
+    return out.set(cl * Math.sin(lon), Math.sin(lat), cl * Math.cos(lon));
+  }
+  /** Local frame at (x, z): east, up, south — the planet versions of the flat +x, +y, +z. */
+  globeFrame(x, z) {
+    const lon = (x / WORLD_W) * TAU, lat = (0.5 - z / WORLD_H) * LAT_SPAN, cl = Math.cos(lat), sl = Math.sin(lat), co = Math.cos(lon), so = Math.sin(lon);
+    this._e1.set(co, 0, -so); this._u1.set(cl * so, sl, cl * co); this._s1.set(sl * so, -cl, sl * co);
+    return cl;
+  }
+  /** Flat world coordinates (x, height, z) to scene position. */
+  point(x, y, z, out) {
+    if (!this.globe) return out.set(x, y, z);
+    return this.globeN(x, z, out).multiplyScalar(PLANET_R + y);
+  }
+  /** Matrix4.compose that respects the planet: p is flat (x, height, z), q and s are in the local frame. */
+  compose(m, p, q, s) {
+    if (!this.globe) return m.compose(p, q, s);
+    this.globeFrame(p.x, p.z);
+    this._fm.makeBasis(this._e1, this._u1, this._s1); this._fq.setFromRotationMatrix(this._fm).multiply(q);
+    this._gp.copy(this._u1).multiplyScalar(PLANET_R + p.y);
+    return m.compose(this._gp, this._fq, s);
+  }
+  /** Is the surface point (x, z) on the side of the planet facing the camera? */
+  facing(x, z, margin = 0.02) {
+    const C = this.camera.position, n = this.globeN(x, z, this._n);
+    return n.dot(C) > (PLANET_R * PLANET_R) / Math.max(PLANET_R + 1, C.length()) - margin * PLANET_R;
+  }
+  toFlat(v) {
+    const r = v.length() || 1;
+    let lon = Math.atan2(v.x, v.z); if (lon < 0) lon += TAU;
+    const lat = Math.asin(clamp(v.y / r, -1, 1));
+    return { x: (lon / TAU) * WORLD_W, y: clamp((0.5 - lat / LAT_SPAN) * WORLD_H, 0, WORLD_H) };
   }
 
   setSim(sim) {
@@ -93,19 +199,23 @@ export class Renderer3D {
     const i = y0 * GW + x0;
     const h = (H[i] * (1 - fx) + H[i + 1] * fx) * (1 - fy) + (H[i + GW] * (1 - fx) + H[i + GW + 1] * fx) * fy;
     const d = h - w.sea;
-    return d >= 0 ? d * LAND_SCALE : d * SEA_SCALE;
+    return (d >= 0 ? d * LAND_SCALE : d * SEA_SCALE) * this.vs;
   }
 
   buildTerrain() {
     const geo = new THREE.PlaneGeometry(WORLD_W, WORLD_H, GW * 4, GH * 4);
     geo.rotateX(-Math.PI / 2); geo.translate(WORLD_W / 2, 0, WORLD_H / 2);
-    const pos = geo.attributes.position;
-    for (let k = 0; k < pos.count; k++) pos.setY(k, this.heightAt(pos.getX(k), pos.getZ(k)));
+    const pos = geo.attributes.position, v = this._p;
+    for (let k = 0; k < pos.count; k++) {
+      const x = pos.getX(k), z = pos.getZ(k);
+      this.point(x, this.heightAt(x, z), z, v); pos.setXYZ(k, v.x, v.y, v.z);
+    }
     geo.computeVertexNormals();
     this.texture = new THREE.CanvasTexture(this.map2d.tex);
     this.texture.anisotropy = 8; this.texture.magFilter = THREE.LinearFilter; this.texture.minFilter = THREE.LinearFilter; this.texture.generateMipmaps = false;
     this.terrain = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({ map: this.texture, flatShading: true, shininess: 4 }));
     this.scene.add(this.terrain);
+    if (this.globe) return;
     // a skirt under the map edges so the world reads as a solid island block
     const base = new THREE.Mesh(new THREE.BoxGeometry(WORLD_W, 60, WORLD_H), new THREE.MeshPhongMaterial({ color: 0x0b1a2e }));
     base.position.set(WORLD_W / 2, -SEA_SCALE * 0.4 - 30, WORLD_H / 2); this.terrain.add(base);
@@ -124,7 +234,12 @@ export class Renderer3D {
       this.riverGroup.add(m);
     }
     // tube was flattened around y=0, lift each vertex back onto its own path height
-    this.riverGroup.children.forEach((m) => { const p = m.geometry.attributes.position; for (let k = 0; k < p.count; k++) p.setY(k, Math.max(0.5, this.heightAt(p.getX(k), p.getZ(k)) + 0.7)); m.geometry.computeVertexNormals(); });
+    const v = this._p, lift = this.globe ? 0.35 : 0.7;
+    this.riverGroup.children.forEach((m) => {
+      const p = m.geometry.attributes.position;
+      for (let k = 0; k < p.count; k++) { const x = p.getX(k), z = p.getZ(k); this.point(x, Math.max(lift * 0.7, this.heightAt(x, z) + lift), z, v); p.setXYZ(k, v.x, v.y, v.z); }
+      m.geometry.computeVertexNormals();
+    });
     this.scene.add(this.riverGroup);
   }
 
@@ -136,41 +251,75 @@ export class Renderer3D {
     this.renderer.setSize(this.w, this.h, false);
     this.camera.aspect = this.w / this.h; this.camera.updateProjectionMatrix();
     this.fit = 0.5;
-    this.cam.zoom = clamp(this.cam.zoom, this.minZoom(), 8);
+    this.cam.zoom = clamp(this.cam.zoom, this.minZoom(), this.maxZoom());
   }
-  minZoom() { return 0.45; }
-  clampCam() { this.cam.x = clamp(this.cam.x, 0, WORLD_W); this.cam.y = clamp(this.cam.y, 0, WORLD_H); this.cam.pitch = clamp(this.cam.pitch, 0.25, 1.45); }
+  minZoom() { return this.globe ? 0.42 : 0.45; }
+  maxZoom() { return this.globe ? 12 : 8; }
+  /** 0 = standing on the surface, 1 = looking at the whole planet from orbit. */
+  orbitT() { return this.globe ? smooth(220, 1250, this.distance) : 0; }
+  clampCam() {
+    const c = this.cam;
+    if (this.globe) { c.x = ((c.x % WORLD_W) + WORLD_W) % WORLD_W; c.y = clamp(c.y, 20, WORLD_H - 20); c.pitch = clamp(c.pitch, 0.3, 1.5); }
+    else { c.x = clamp(c.x, 0, WORLD_W); c.y = clamp(c.y, 0, WORLD_H); c.pitch = clamp(c.pitch, 0.25, 1.45); }
+    c.zoom = clamp(c.zoom, this.minZoom(), this.maxZoom());
+  }
   placeCamera() {
+    if (this.globe) return this.placeGlobeCamera();
+    this.camera.up.set(0, 1, 0);
     const c = this.cam, d = this.distance, ty = Math.max(0, this.heightAt(c.x, c.y));
     this.camera.position.set(c.x + Math.sin(c.yaw) * Math.cos(c.pitch) * d, ty + Math.sin(c.pitch) * d, c.y + Math.cos(c.yaw) * Math.cos(c.pitch) * d);
     this.camera.lookAt(c.x, ty, c.y);
   }
+  placeGlobeCamera() {
+    const c = this.cam, d = this.distance, t = this.orbitT();
+    this.globeFrame(c.x, c.y);
+    const ground = PLANET_R + Math.max(0, this.heightAt(c.x, c.y));
+    const pe = c.pitch + (Math.PI / 2 - 0.001 - c.pitch) * t; // zoomed out, the camera swings to look straight down at the planet
+    const h = this._h1.copy(this._s1).multiplyScalar(Math.cos(c.yaw)).addScaledVector(this._e1, Math.sin(c.yaw));
+    const dir = this._d1.copy(this._u1).multiplyScalar(Math.sin(pe)).addScaledVector(h, Math.cos(pe));
+    const target = this._gp.copy(this._u1).multiplyScalar(ground * (1 - t));
+    this.camera.position.copy(target).addScaledVector(dir, d + PLANET_R * t * 0.25);
+    this.camera.up.copy(this._u1).multiplyScalar(Math.cos(pe)).addScaledVector(h, -Math.sin(pe));
+    this.camera.lookAt(target);
+  }
   pan(dx, dy) {
-    const k = (this.distance * 1.1) / this.h, c = this.cam;
+    const c = this.cam, t = this.orbitT();
+    const k = ((this.globe ? this.distance - (PLANET_R - 40) * t : this.distance) * 1.1) / this.h;
     const fx = -Math.sin(c.yaw), fz = -Math.cos(c.yaw); // screen up = forward on the ground
     const rx = Math.cos(c.yaw), rz = -Math.sin(c.yaw);
-    c.x -= (dx * rx - dy * fx) * k; c.y -= (dx * rz - dy * fz) * k;
+    let ex = (dx * rx - dy * fx) * k, ez = (dx * rz - dy * fz) * k;
+    if (this.globe) { const cl = Math.cos((0.5 - c.y / WORLD_H) * LAT_SPAN); ex /= Math.max(0.25, cl); ez /= SOUTH_K; }
+    c.x -= ex; c.y -= ez;
     this.follow = false; this.clampCam();
   }
   rotate(dyaw, dpitch) { this.cam.yaw += dyaw; this.cam.pitch += dpitch; this.clampCam(); }
   zoomAt(sx, sy, factor) {
     const p = this.toWorld(sx, sy);
-    this.cam.zoom = clamp(this.cam.zoom * factor, this.minZoom(), 8);
-    if (p && factor > 1) { const t = 1 - 1 / factor; this.cam.x += (p.x - this.cam.x) * t; this.cam.y += (p.y - this.cam.y) * t; }
+    this.cam.zoom = clamp(this.cam.zoom * factor, this.minZoom(), this.maxZoom());
+    if (p && p.hit && factor > 1) { const t = 1 - 1 / factor; this.cam.x += (this.globe ? wrapDX(p.x - this.cam.x) : p.x - this.cam.x) * t; this.cam.y += (p.y - this.cam.y) * t; }
     this.clampCam();
   }
-  focus(x, y, zoom) { this.cam.x = x; this.cam.y = y; if (zoom) this.cam.zoom = clamp(zoom, this.minZoom(), 8); this.clampCam(); }
-  fitWorld() { this.cam.zoom = this.minZoom(); this.cam.x = WORLD_W / 2; this.cam.y = WORLD_H / 2; this.cam.pitch = 0.95; this.follow = false; }
+  /** Turn the planet so the morning side faces the camera. */
+  faceSun() {
+    const p = (this.sim.tick % DAY_TICKS) / DAY_TICKS, lon = Math.PI - (p - 0.25) * TAU - 0.6;
+    this.cam.x = (((lon / TAU) % 1) + 1) % 1 * WORLD_W;
+  }
+  focus(x, y, zoom) { this.cam.x = x; this.cam.y = y; if (zoom) this.cam.zoom = clamp(zoom, this.minZoom(), this.maxZoom()); this.clampCam(); }
+  fitWorld() {
+    if (this.globe) { this.cam.zoom = 0.85; this.cam.y = WORLD_H * 0.45; this.cam.pitch = 0.9; this.follow = false; return; }
+    this.cam.zoom = this.minZoom(); this.cam.x = WORLD_W / 2; this.cam.y = WORLD_H / 2; this.cam.pitch = 0.95; this.follow = false;
+  }
   toWorld(sx, sy) {
-    this.placeCamera();
+    this.placeCamera(); this.camera.updateMatrixWorld();
     this.raycaster.setFromCamera({ x: (sx / this.w) * 2 - 1, y: -(sy / this.h) * 2 + 1 }, this.camera);
-    const hits = this.raycaster.intersectObjects([this.terrain, this.water], false);
-    if (!hits.length) return { x: this.cam.x, y: this.cam.y };
+    const hits = this.raycaster.intersectObjects(this.globe ? [this.terrain, this.ocean] : [this.terrain, this.water], false);
+    if (!hits.length) return { x: this.cam.x, y: this.cam.y, hit: false };
     const p = hits[0].point;
-    return { x: p.x, y: p.z };
+    if (this.globe) return { ...this.toFlat(p), hit: true };
+    return { x: p.x, y: p.z, hit: true };
   }
   /** Rough ground footprint of the view, for culling and the minimap rectangle. */
-  view() { const r = this.distance * 0.9; return { x0: this.cam.x - r, x1: this.cam.x + r, y0: this.cam.y - r * 0.7, y1: this.cam.y + r * 0.7 }; }
+  view() { const r = this.globe ? Math.min(700, this.distance * 0.6) : this.distance * 0.9; return { x0: this.cam.x - r, x1: this.cam.x + r, y0: this.cam.y - r * 0.7, y1: this.cam.y + r * 0.7 }; }
 
   // ------------------------------------------------------------ day / night (shared clock with 2D)
   night() { const p = (this.sim.tick % DAY_TICKS) / DAY_TICKS; return clamp(0.15 - Math.sin(p * TAU) * 1.3, 0, 1); }
@@ -214,16 +363,20 @@ export class Renderer3D {
 
   // ------------------------------------------------------------ flora & settlements (rebuilt occasionally)
   buildFlora() {
-    const w = this.sim.world, c = this.cam, R = Math.min(900, this.distance * 1.3);
-    const cx0 = Math.max(0, ((c.x - R) / CELL) | 0), cx1 = Math.min(GW - 1, ((c.x + R) / CELL) | 0), cy0 = Math.max(0, ((c.y - R) / CELL) | 0), cy1 = Math.min(GH - 1, ((c.y + R) / CELL) | 0);
+    const w = this.sim.world, c = this.cam, G = this.globe, R = G ? Math.min(1100, this.distance * 1.6) : Math.min(900, this.distance * 1.3);
+    let cx0 = Math.floor((c.x - R) / CELL), cx1 = Math.floor((c.x + R) / CELL);
+    if (!G) { cx0 = Math.max(0, cx0); cx1 = Math.min(GW - 1, cx1); } else if (cx1 - cx0 >= GW) { cx0 = 0; cx1 = GW - 1; }
+    const cy0 = Math.max(0, ((c.y - R) / CELL) | 0), cy1 = Math.min(GH - 1, ((c.y + R) / CELL) | 0);
     const col = this._c, m = this._m, q = this._q, p = this._p, s = this._s;
-    const put = (geo, x, y, z, sx, sy, sz, hex, rx = 0, rz = 0) => { this._e.set(rx, 0, rz); q.setFromEuler(this._e); p.set(x, y, z); s.set(sx, sy, sz); m.compose(p, q, s); col.setHex(hex); this.push(geo, m, col); };
-    const dense = this.distance < 700;
-    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+    const put = (geo, x, y, z, sx, sy, sz, hex, rx = 0, rz = 0) => { this._e.set(rx, 0, rz); q.setFromEuler(this._e); p.set(x, y, z); s.set(sx, sy, sz); this.compose(m, p, q, s); col.setHex(hex); this.push(geo, m, col); };
+    const dense = this.distance < (G ? 450 : 700), orbit = G && this.distance > 900;
+    for (let cy = cy0; cy <= cy1; cy++) for (let cxr = cx0; cxr <= cx1; cxr++) {
+      const cx = ((cxr % GW) + GW) % GW;
+      if (G && !this.facing((cx + 0.5) * CELL, (cy + 0.5) * CELL, 0.06)) continue;
       const i = cy * GW + cx, b = w.biome[i], max = BIOMES[b].plant || 1;
       const water = w.isWater(i);
       const dens = clamp(w.bio[i] / (max * 0.9), 0, 1) * (water ? 1 : w.green[i]);
-      const n = Math.round(dens * (dense ? 4 : 2));
+      const n = Math.round(dens * (dense ? 4 : orbit ? 1.4 : 2));
       for (let k = 0; k < n; k++) {
         const x = cx * CELL + hash(i, k, 17) * CELL, z = cy * CELL + hash(i, k, 29) * CELL, h3 = hash(i, k, 43), y = this.heightAt(x, z), sc = 0.8 + h3 * 0.7;
         if (w.farm[i]) { put("box", x, y + 1, z, 2.5, 1, 0.4, h3 > 0.5 ? 0xd9b44a : 0x9cbf4a); continue; }
@@ -274,7 +427,7 @@ export class Renderer3D {
 
   buildCivilization() {
     const sim = this.sim, col = this._c, m = this._m, q = this._q, p = this._p, s = this._s;
-    const put = (geo, x, y, z, sx, sy, sz, hex, ry = 0) => { this._e.set(0, ry, 0); q.setFromEuler(this._e); p.set(x, y, z); s.set(sx, sy, sz); m.compose(p, q, s); col.setHex(hex); this.push(geo, m, col); };
+    const put = (geo, x, y, z, sx, sy, sz, hex, ry = 0) => { this._e.set(0, ry, 0); q.setFromEuler(this._e); p.set(x, y, z); s.set(sx, sy, sz); this.compose(m, p, q, s); col.setHex(hex); this.push(geo, m, col); };
     this.windows = [];
     for (const st of sim.settlements) {
       const L = st.level, n = Math.min(40, 3 + L * 6 + Math.floor(Math.sqrt(st.pop) / 2.5)), R = 8 + L * 9 + Math.sqrt(st.pop) * 0.35;
@@ -311,14 +464,15 @@ export class Renderer3D {
     if (this.frame % 30 === 0) this.texture.needsUpdate = true;
 
     // static-ish layers are rebuilt every so often, then creatures are appended each frame
-    const moved = !this.floraAt || Math.hypot(this.cam.x - this.floraAt.x, this.cam.y - this.floraAt.y) > this.distance * 0.35 || Math.abs(this.floraAt.d - this.distance) > this.distance * 0.3;
+    const fdx = this.floraAt ? (this.globe ? wrapDX(this.cam.x - this.floraAt.x) : this.cam.x - this.floraAt.x) : 0;
+    const moved = !this.floraAt || this.floraAt.g !== this.globe || Math.hypot(fdx, this.cam.y - this.floraAt.y) > (this.globe ? Math.min(160, this.distance * 0.35) : this.distance * 0.35) || Math.abs(this.floraAt.d - this.distance) > this.distance * 0.3;
     if (moved || this.frame % 120 === 0) {
       for (const k in this.inst) this.inst[k].count = 0;
       this.glow.count = 0;
       if (this.effects) this.buildFlora();
       this.buildCivilization();
       this.base = {}; for (const k in this.inst) this.base[k] = this.inst[k].count;
-      this.floraAt = { x: this.cam.x, y: this.cam.y, d: this.distance };
+      this.floraAt = { x: this.cam.x, y: this.cam.y, d: this.distance, g: this.globe };
     }
     this.resetInstances();
     this.drawCreatures(time);
@@ -332,12 +486,15 @@ export class Renderer3D {
   }
 
   drawCreatures(time) {
-    const sim = this.sim, w = sim.world, cam = this.camera.position;
-    const near = this.distance * 2.2, far2 = (this.distance * 3.2) ** 2;
-    const base = this._b, anim = this._anim;
+    const sim = this.sim, w = sim.world, cam = this.camera.position, G = this.globe;
+    const near = G ? Math.min(this.distance, 600) * 2.2 : this.distance * 2.2, far2 = (this.distance * 3.2) ** 2;
+    const base = this._b, anim = this._anim, wp = this._gp;
     for (const c of sim.creatures) {
-      const dx = c.x - cam.x, dz = c.y - cam.z, d2 = dx * dx + dz * dz;
-      if (d2 > far2) continue;
+      let d2;
+      if (G) {
+        if (!this.facing(c.x, c.y, 0.03)) continue;
+        this.globeN(c.x, c.y, wp).multiplyScalar(PLANET_R); d2 = wp.distanceToSquared(cam);
+      } else { const dx = c.x - cam.x, dz = c.y - cam.z; d2 = dx * dx + dz * dz; if (d2 > far2) continue; }
       const sp = sim.species.get(c.sp);
       if (!sp) continue;
       const arch = sp.arch || archetypeOf(c.g, sp.sapient, sp.proto);
@@ -347,11 +504,11 @@ export class Renderer3D {
       if (place === "sea") y = Math.max(ground + r, Math.min(-r * 0.9 - 1, -2 - (c.id % 5)));
       else if (place === "floor") y = Math.min(ground, -0.5);
       else if (place === "surface") y = -r * 0.45;
-      else if (place === "air") y = Math.max(ground, 0) + 16 + r * 3 + Math.sin(time / 600 + c.id) * 3;
+      else if (place === "air") y = Math.max(ground, 0) + (16 + r * 3 + Math.sin(time / 600 + c.id) * 3) * (G ? 0.45 : 1);
       else y = Math.max(ground, place === "ground" && ground < 0 ? -r * 0.4 : ground);
       this._e.set(0, -c.a, 0); this._q.setFromEuler(this._e);
       this._p.set(c.x, y, c.y); this._s.set(r, r, r);
-      base.compose(this._p, this._q, this._s);
+      this.compose(base, this._p, this._q, this._s);
       const C = this.colorsFor(sp, arch);
       if (arch === "human") { C.c = C.c || new THREE.Color(); C.s = C.s || new THREE.Color(); C.h = C.h || new THREE.Color(); }
       const dist = Math.sqrt(d2);
@@ -371,21 +528,68 @@ export class Renderer3D {
   }
 
   drawGlow(time) {
-    const night = this.night(), m = this._m;
-    if (night < 0.15 || !this.windows) return;
+    const night = this.night(), m = this._m, G = this.globe;
+    if ((!G && night < 0.15) || !this.windows) return;
     for (const [x, y, z, s, fire] of this.windows) {
+      if (G && this.globeN(x, z, this._n).dot(this.sunDir) > 0.06) continue; // only the night side of the planet lights up
       const f = fire ? 1 + Math.sin(time / 90 + x) * 0.25 : 1;
       this._q.identity(); this._p.set(x, y, z); this._s.set(fire ? s * f : s * 1.02, fire ? s * f : 0.6, fire ? s * f : s * 1.02);
-      m.compose(this._p, this._q, this._s);
+      this.compose(m, this._p, this._q, this._s);
       if (this.glow.count < 4000) this.glow.setMatrixAt(this.glow.count++, m);
     }
     for (const e of this.sim.effects) if (e.kind === "rocket") {
-      const t = 1 - e.life / e.max; this._p.set(e.x + t * 40, Math.max(0, this.heightAt(e.x, e.y)) + 20 + t * t * 500, e.y); this._s.set(1.5, 4, 1.5);
-      m.compose(this._p, this._q, this._s); if (this.glow.count < 4000) this.glow.setMatrixAt(this.glow.count++, m);
+      const t = 1 - e.life / e.max; this._q.identity(); this._p.set(e.x + t * 40, Math.max(0, this.heightAt(e.x, e.y)) + 20 * this.vs + t * t * 500, e.y); this._s.set(1.5, 4, 1.5);
+      this.compose(m, this._p, this._q, this._s); if (this.glow.count < 4000) this.glow.setMatrixAt(this.glow.count++, m);
     }
   }
 
+  /** Planet mode: the sun circles the planet with the shared clock, so a day/night line sweeps across it. */
+  updateSpace(time) {
+    const p = (this.sim.tick % DAY_TICKS) / DAY_TICKS;
+    const lon = Math.PI - (p - 0.25) * TAU; // the clock is local time at the map's centre meridian
+    this.sunDir.set(Math.sin(lon) * Math.cos(0.32), Math.sin(0.32), Math.cos(lon) * Math.cos(0.32)).normalize();
+    this.scene.background = this._spaceBg || (this._spaceBg = new THREE.Color(0x04060e));
+    this.scene.fog.near = 1e5; this.scene.fog.far = 2e5;
+    this.sun.position.copy(this.sunDir).multiplyScalar(3000); this.sun.target.position.set(0, 0, 0);
+    this.sun.intensity = 1.05; this.sun.color.setHex(0xfff1dc);
+    this.hemi.intensity = this.weather ? 0.24 : 0.7;
+    this.sunBall.position.copy(this.sunDir).multiplyScalar(4300); this.sunHalo.position.copy(this.sunBall.position);
+    const ma = time / 26000;
+    this.moon.position.set(Math.cos(ma) * 1150, Math.sin(ma) * 260, Math.sin(ma) * 1150); this.moon.rotation.y = ma * 3;
+    const pol = this.sim.climate.pollution;
+    this.atmoOuter.material.uniforms.col.value.setRGB(0.42 + pol * 0.5, 0.78 - pol * 0.25, 1 - pol * 0.6);
+    this.atmoInner.material.uniforms.col.value.copy(this.atmoOuter.material.uniforms.col.value);
+    this.ocean.material.color.setHex(this.sim.era <= 1 ? 0x2a7fa6 : 0x2a86c8);
+    this.glow.material.color.setHex(0xffd27a);
+
+    // clouds drift round the planet and fade away as you descend through them
+    const cm = this.cloudMesh, m = this._m;
+    cm.count = 0;
+    const d = this.distance;
+    if (this.weather && this.map2d.cloudDensity && d > 140) {
+      const off = this.map2d.cloudOffset(), step = 5;
+      for (let gy = 2; gy < 135; gy += step) for (let gx = 0; gx < 240; gx += step) {
+        const dens = this.map2d.cloudDensity[gy * 240 + gx];
+        if (dens < 0.5) continue;
+        const x = ((gx / 240) * WORLD_W + off) % WORLD_W, z = (gy / 135) * WORLD_H;
+        if (!this.facing(x, z, 0.08)) continue;
+        // each cloud is a little cluster of soft puffs
+        const sz = (5 + dens * 7) * (0.8 + hash(gx, gy, 5) * 0.5), a = hash(gx, gy, 7) * TAU;
+        this._q.identity();
+        for (let k = 0; k < 3; k++) {
+          const o = (k - 1) * sz * 0.9, r = sz * (k === 1 ? 1 : 0.72);
+          this._p.set(x + Math.cos(a) * o, 17 + hash(gx, gy, 3) * 4 + (k === 1 ? 1 : 0), z + Math.sin(a) * o); this._s.set(r, r * 0.5, r);
+          this.compose(m, this._p, this._q, this._s); if (cm.count < 3200) cm.setMatrixAt(cm.count++, m);
+        }
+      }
+      cm.material.opacity = clamp((d - 140) / 380, 0, 0.92);
+      cm.instanceMatrix.needsUpdate = true;
+    }
+    this.updatePrecip(time);
+  }
+
   updateSky(time) {
+    if (this.globe) return this.updateSpace(time);
     const night = this.weather ? this.night() : 0, p = (this.sim.tick % DAY_TICKS) / DAY_TICKS;
     const day = new THREE.Color(0x8fc4e8), dusk = new THREE.Color(0xf0a070), nightC = new THREE.Color(0x0a1530);
     const duskAmt = this.weather ? clamp(1 - Math.min(Math.abs(p - 0.5), Math.abs(p), Math.abs(p - 1)) * 7, 0, 1) * (1 - night * 0.6) : 0;
@@ -413,7 +617,7 @@ export class Renderer3D {
         const x = ((gx / 240) * WORLD_W + off) % WORLD_W, z = (gy / 135) * WORLD_H;
         const sz = 14 + dens * 26;
         this._q.identity(); this._p.set(x, CLOUD_Y + hash(gx, gy, 3) * 40, z); this._s.set(sz * 1.6, sz * 0.4, sz);
-        m.compose(this._p, this._q, this._s); if (cm.count < 900) cm.setMatrixAt(cm.count++, m);
+        m.compose(this._p, this._q, this._s); if (cm.count < 3200) cm.setMatrixAt(cm.count++, m);
       }
       cm.material.opacity = clamp((camH - CLOUD_Y - 250) / 600, 0, 0.7) * (1 - night * 0.6);
       cm.instanceMatrix.needsUpdate = true;
@@ -422,8 +626,10 @@ export class Renderer3D {
   }
 
   updatePrecip(time) {
-    const pos = this.rainPos, w = this.sim.world, R = Math.min(700, this.distance * 0.9);
+    const pos = this.rainPos, w = this.sim.world, R = Math.min(this.globe ? 260 : 700, this.distance * 0.9), G = this.globe, v = this._gp;
     let any = false;
+    if (G && this.distance > 700) { this.rain.visible = false; return; }
+    this.rain.material.size = G ? 0.45 : 2.2;
     for (let k = 0; k < this.rainSeed.length; k++) {
       const s = this.rainSeed[k];
       const x = this.cam.x + (s[0] - 0.5) * 2 * R, z = this.cam.y + (s[1] - 0.5) * 2 * R;
@@ -432,7 +638,8 @@ export class Renderer3D {
       any = true;
       const snow = w.temp[w.idx(x, z)] < 0.2, fall = snow ? 0.02 : 0.35;
       s[2] = (s[2] - fall * 0.016 * 6) % 1; if (s[2] < 0) s[2] += 1;
-      pos[k * 3] = x + (snow ? Math.sin(time / 600 + k) * 4 : 0); pos[k * 3 + 1] = Math.max(0, this.heightAt(x, z)) + s[2] * 220; pos[k * 3 + 2] = z;
+      this.point(x + (snow ? Math.sin(time / 600 + k) * 4 : 0), Math.max(0, this.heightAt(x, z)) + s[2] * (G ? 30 : 220), z, v);
+      pos[k * 3] = v.x; pos[k * 3 + 1] = v.y; pos[k * 3 + 2] = v.z;
     }
     this.rain.visible = any;
     this.rain.geometry.attributes.position.needsUpdate = true;
@@ -443,9 +650,9 @@ export class Renderer3D {
     if (!c || c.dead) { this.ring.visible = false; return; }
     const r = c.r * 1.25 * 2.4;
     this.ring.visible = true;
-    this.ring.position.set(c.x, Math.max(0, this.heightAt(c.x, c.y)) + 0.6, c.y);
-    this.ring.scale.set(r, r, r);
-    this.ring.rotation.z = time / 900;
+    this._e.set(-Math.PI / 2, 0, time / 900); this._q.setFromEuler(this._e);
+    this._p.set(c.x, Math.max(0, this.heightAt(c.x, c.y)) + 0.6, c.y); this._s.set(r, r, r);
+    this.compose(this.ring.matrix, this._p, this._q, this._s);
   }
 
   drawMinimap(canvas) {

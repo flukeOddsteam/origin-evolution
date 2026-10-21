@@ -14,7 +14,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const SETTINGS_KEY = "originSettings_v3";
 
 // ------------------------------------------------------------ state
-let settings = { compact: true, effects: true, bg: true, weather: true, view3d: true, theme: "dark", seenHelp: false };
+let settings = { compact: true, effects: true, bg: true, weather: true, view: "planet", theme: "dark", seenHelp: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } };
 function applyTheme() { document.documentElement.dataset.uiTheme = settings.theme; }
@@ -27,26 +27,32 @@ let map3d = null, renderer = map2d;
 map2d.effects = settings.effects; map2d.weather = settings.weather;
 const has3D = webglAvailable();
 
-/** Switch between the 2D map and the 3D landscape, carrying camera and selection across. */
-function setView(want3d) {
-  if (want3d && !has3D) { toast("เบราว์เซอร์นี้ไม่รองรับ 3D (WebGL) จึงใช้แผนที่ 2D"); want3d = false; }
-  if (want3d && !map3d) {
+let booting = true;
+const VIEWS = ["planet", "3d", "2d"];
+/** Switch between the round planet, the flat 3D landscape and the 2D map, carrying camera and selection across. */
+function setView(mode) {
+  if (mode === true) mode = "3d"; else if (mode === false) mode = "2d";
+  if (!VIEWS.includes(mode)) mode = "planet";
+  if (mode !== "2d" && !has3D) { toast("เบราว์เซอร์นี้ไม่รองรับ 3D (WebGL) จึงใช้แผนที่ 2D"); mode = "2d"; }
+  if (mode !== "2d" && !map3d) {
     try { map3d = new Renderer3D($("world3d"), sim, map2d); }
-    catch (err) { console.warn("3D init failed", err); toast("เปิดมุมมอง 3D ไม่สำเร็จ จึงใช้แผนที่ 2D"); want3d = false; }
+    catch (err) { console.warn("3D init failed", err); toast("เปิดมุมมอง 3D ไม่สำเร็จ จึงใช้แผนที่ 2D"); mode = "2d"; }
   }
-  const from = renderer, to = want3d ? map3d : map2d;
-  if (from !== to) {
+  const from = renderer, to = mode === "2d" ? map2d : map3d, wasGlobe = from === map3d && map3d.globe;
+  if (to === map3d) map3d.setGlobe(mode === "planet");
+  if (from !== to || wasGlobe !== (mode === "planet")) {
     to.selected = from.selected; to.follow = from.follow;
     to.effects = settings.effects; to.weather = settings.weather;
-    $("world").hidden = want3d; $("world3d").hidden = !want3d;
+    $("world").hidden = mode !== "2d"; $("world3d").hidden = mode === "2d";
     renderer = to; to.resize();
-    to.focus(from.cam.x, from.cam.y, from === map2d ? Math.max(to.minZoom(), from.cam.zoom * 0.9) : Math.max(map2d.fit, from.cam.zoom));
+    if (mode === "planet") { to.cam.x = from.cam.x; to.cam.y = from.cam.y; if (!from.selected) { to.fitWorld(); if (booting) to.faceSun(); } else to.focus(from.cam.x, from.cam.y, 4); }
+    else to.focus(from.cam.x, from.cam.y, from === map2d ? Math.max(to.minZoom(), from.cam.zoom * 0.9) : to === map2d ? Math.max(map2d.fit, Math.min(6, from.cam.zoom)) : Math.max(to.minZoom(), Math.min(8, from.cam.zoom)));
   }
-  $("viewToggle").textContent = want3d ? "2D" : "3D";
-  $("viewToggle").title = want3d ? "สลับเป็นแผนที่ 2D (V)" : "สลับเป็นมุมมอง 3D (V)";
-  $("rotGroup").hidden = !want3d;
-  settings.view3d = want3d; saveSettings();
+  for (const b of document.querySelectorAll("#viewGroup [data-view]")) b.classList.toggle("on", b.dataset.view === mode);
+  $("rotGroup").hidden = mode === "2d";
+  settings.view = mode; saveSettings();
 }
+const currentView = () => (renderer === map2d ? "2d" : map3d.globe ? "planet" : "3d");
 let speed = 1, tool = "inspect", seedSpecies = null, activeTab = "map", catchingUp = false, logFilter = "all";
 let selectedSettlement = null, chartHover = null;
 const incomeLog = []; // [time, dna, energy, knowledge]
@@ -609,7 +615,7 @@ $("toolBar").addEventListener("click", (e) => {
 document.querySelectorAll(".speed-btn[data-speed]").forEach((b) => b.addEventListener("click", () => setSpeed(+b.dataset.speed)));
 function setSpeed(s) { speed = s; document.querySelectorAll(".speed-btn[data-speed]").forEach((b) => b.classList.toggle("active", +b.dataset.speed === s)); updateFast(); }
 $("fitButton").addEventListener("click", () => renderer.fitWorld());
-$("viewToggle").addEventListener("click", () => setView(renderer !== map3d));
+$("viewGroup").addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
 $("rotGroup").addEventListener("click", (e) => { const r = e.target.closest("[data-rot]"), t = e.target.closest("[data-tilt]"); if (!map3d) return; if (r) map3d.rotate(+r.dataset.rot * 0.5, 0); if (t) map3d.rotate(0, +t.dataset.tilt * 0.2); });
 $("minimap").addEventListener("click", (e) => { const r = e.target.getBoundingClientRect(); renderer.follow = false; renderer.focus((e.clientX - r.left) / r.width * 1920, (e.clientY - r.top) / r.height * 1080); });
 $("popChart").addEventListener("pointermove", (e) => { chartHover = e.offsetX; });
@@ -656,7 +662,7 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setSpeed(speed === 0 ? (setSpeed.prev || 1) : (setSpeed.prev = speed, 0)); }
   else if (["Digit1", "Digit2", "Digit3", "Digit4"].includes(e.code)) setSpeed([1, 3, 10, 30][+e.code.slice(-1) - 1]);
   else if (e.code === "KeyF") renderer.fitWorld();
-  else if (e.code === "KeyV") setView(renderer !== map3d);
+  else if (e.code === "KeyV") setView(VIEWS[(VIEWS.indexOf(currentView()) + 1) % 3]);
   else if ((e.code === "KeyQ" || e.code === "KeyE") && renderer === map3d) map3d.rotate(e.code === "KeyQ" ? -0.3 : 0.3, 0);
   else if (e.code === "Escape") { closeInspector(); tool = "inspect"; renderTools(); }
 });
@@ -706,9 +712,11 @@ function focusLife() {
 
 // ------------------------------------------------------------ boot
 map2d.resize();
-setView(settings.view3d && has3D);
-if (!has3D) $("viewToggle").hidden = true;
-focusLife();
+if (settings.view3d !== undefined && !settings.viewMigrated) { settings.view = "planet"; settings.viewMigrated = true; delete settings.view3d; }
+setView(has3D ? settings.view : "2d");
+if (!has3D) for (const b of document.querySelectorAll("#viewGroup [data-view]")) b.hidden = b.dataset.view !== "2d";
+if (currentView() !== "planet") focusLife();
+booting = false;
 refreshNow(); renderLog();
 if (!settings.seenHelp) { $("helpDialog").showModal(); settings.seenHelp = true; saveSettings(); }
 if (restored && savedAt) catchUp((Date.now() - savedAt) / 1000);

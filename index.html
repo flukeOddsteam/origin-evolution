@@ -70,7 +70,7 @@
             <canvas id="world" aria-label="โลกจำลองแบบเรียลไทม์ (แผนที่ 2 มิติ)"></canvas>
             <canvas id="world3d" aria-label="โลกจำลองแบบเรียลไทม์ (3 มิติ)" hidden></canvas>
             <div class="hud hud-tr" role="group" aria-label="มุมมอง">
-              <button class="hud-btn view-btn" id="viewToggle" title="สลับมุมมอง 2D / 3D (V)">3D</button>
+              <span class="view-group" id="viewGroup" role="group" aria-label="มุมมองโลก"><button class="hud-btn" data-view="planet" title="ดาวเคราะห์ทั้งดวงลอยในอวกาศ (V)">🪐 ดาว</button><button class="hud-btn" data-view="3d" title="ภูมิประเทศ 3D แบบแผ่น (V)">3D</button><button class="hud-btn" data-view="2d" title="แผนที่ 2D (V)">2D</button></span>
               <span class="rot-group" id="rotGroup" hidden><button class="hud-btn" data-rot="-1" title="หมุนซ้าย (Q)">⟲</button><button class="hud-btn" data-rot="1" title="หมุนขวา (E)">⟳</button><button class="hud-btn" data-tilt="1" title="มองจากด้านบน">⤒</button><button class="hud-btn" data-tilt="-1" title="มองแนวราบ">⤓</button></span>
               <button class="hud-btn" id="fitButton" title="มองทั้งโลก (F)">⤢</button>
             </div>
@@ -157,7 +157,7 @@
       <li><b>คุณคือผู้วางแผนวิวัฒนาการ</b> อัปเกรดโลก กำหนดแรงคัดเลือก ปลูกอาหาร เปลี่ยนภูมิอากาศ หรือส่งอุกกาบาต</li>
       <li><b>ทำเป้าหมายของยุคให้ครบ</b> (คอลัมน์ซ้ายบน) แล้วกดวิวัฒนาการเพื่อปลดล็อกยุคใหม่</li>
       <li><b>มุมมอง 3D/2D</b> สลับที่มุมขวาบนของแผนที่ ใน 3D คลิกขวาหรือ Shift+ลากเพื่อหมุนกล้อง</li>
-      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>V</kbd> สลับ 2D/3D · <kbd>Q</kbd>/<kbd>E</kbd> หมุนกล้อง · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิก</li>
+      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>V</kbd> สลับ ดาวเคราะห์/3D/2D · <kbd>Q</kbd>/<kbd>E</kbd> หมุนกล้อง · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิก</li>
     </ul>
     <button class="evo-button" value="close">เริ่มเลย</button>
   </form></dialog>
