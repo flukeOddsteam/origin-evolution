@@ -188,9 +188,8 @@ export class Renderer {
   }
   dayLabel() { const p = (this.sim.tick % DAY_TICKS) / DAY_TICKS; const h = (6 + p * 24) % 24; return `${String(Math.floor(h)).padStart(2, "0")}:${String(Math.floor((h % 1) * 60)).padStart(2, "0")}`; }
 
-  // ------------------------------------------------------------ main draw
-  draw(time) {
-    const ctx = this.ctx, sim = this.sim, z = this.cam.zoom, dpr = this.dpr;
+  /** Rebuild a band of the terrain texture (also used by the 3D view, which drapes it over the mesh). */
+  tickTexture() {
     this.frame++;
     if (this.texAge > 900) { this.prepareCells(); this.buildTexture(); this.texRow = 0; }
     else if (this.frame % 2 === 0) {
@@ -198,6 +197,12 @@ export class Renderer {
       if (r0 === 0) this.prepareCells();
       this.buildTexture(r0, r1); this.texRow = r1 >= TEX_H ? 0 : r1;
     }
+  }
+
+  // ------------------------------------------------------------ main draw
+  draw(time) {
+    const ctx = this.ctx, sim = this.sim, z = this.cam.zoom, dpr = this.dpr;
+    this.tickTexture();
     if (this.follow && this.selected && !this.selected.dead) { this.cam.x = this.selected.x; this.cam.y = this.selected.y; this.clampCam(); }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

@@ -29,8 +29,8 @@ kbd{font:600 11px "Space Grotesk",sans-serif;background:#1b2840;border:1px solid
 /* ---------- stage ---------- */
 .stage{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:stretch}
 .world-wrap{position:relative;overflow:hidden;min-height:560px;height:min(72vh,720px);background:#050a14;padding:0}
-#world{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
-#world.dragging{cursor:grabbing}#world.tool{cursor:crosshair}
+#world,#world3d{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+#world.dragging,#world3d.dragging{cursor:grabbing}#world.tool,#world3d.tool{cursor:crosshair}#world[hidden],#world3d[hidden]{display:none}
 .hud{position:absolute;z-index:2;pointer-events:none}
 .hud>*{pointer-events:auto}
 .hud-tl{top:12px;left:12px;display:flex;flex-direction:column;gap:6px}
@@ -264,3 +264,4 @@ body.no-effects .tick-item{animation:none}
 .ency{background:#0f1a2c;border:1px solid #1e2d46;border-radius:12px;padding:8px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:2px}
 .ency span{font-size:26px;line-height:1.2}.ency b{font-size:12px}.ency small{font-size:10.5px;color:var(--muted)}
 .ency.locked{opacity:.45}
+.hud-sep{width:1px;height:20px;background:var(--line);margin:0 2px}.view-btn{min-width:40px;color:var(--gold)}.rot-group{display:inline-flex;gap:2px}.rot-group[hidden]{display:none}

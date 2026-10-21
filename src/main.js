@@ -5,6 +5,7 @@ import { GENES, GENE_KEYS, ROLE_TH, TIER_TH } from "./sim/genes.js";
 import { SETTLEMENT_LEVELS } from "./sim/eras.js";
 import { capsFor } from "./sim/eras.js";
 import { Renderer } from "./render.js";
+import { Renderer3D, webglAvailable } from "./render3d.js";
 import { ARCH, ARCH_KEYS } from "./sim/archetypes.js";
 import { BIOMES } from "./sim/world.js";
 import { drawPopulationChart, drawLineChart, sparkSVG, ROLE_COLORS, ROLE_NAMES } from "./chart.js";
@@ -14,14 +15,37 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const SETTINGS_KEY = "originSettings_v3";
 
 // ------------------------------------------------------------ state
-let settings = { compact: true, effects: true, bg: true, weather: true, seenHelp: false };
+let settings = { compact: true, effects: true, bg: true, weather: true, view3d: true, seenHelp: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let { game, restored, savedAt } = Game.load();
 let sim = game.sim;
-const renderer = new Renderer($("world"), sim);
-renderer.effects = settings.effects; renderer.weather = settings.weather;
+const map2d = new Renderer($("world"), sim);
+let map3d = null, renderer = map2d;
+map2d.effects = settings.effects; map2d.weather = settings.weather;
+const has3D = webglAvailable();
+
+/** Switch between the 2D map and the 3D landscape, carrying camera and selection across. */
+function setView(want3d) {
+  if (want3d && !has3D) { toast("เบราว์เซอร์นี้ไม่รองรับ 3D (WebGL) จึงใช้แผนที่ 2D"); want3d = false; }
+  if (want3d && !map3d) {
+    try { map3d = new Renderer3D($("world3d"), sim, map2d); }
+    catch (err) { console.warn("3D init failed", err); toast("เปิดมุมมอง 3D ไม่สำเร็จ จึงใช้แผนที่ 2D"); want3d = false; }
+  }
+  const from = renderer, to = want3d ? map3d : map2d;
+  if (from !== to) {
+    to.selected = from.selected; to.follow = from.follow;
+    to.effects = settings.effects; to.weather = settings.weather;
+    $("world").hidden = want3d; $("world3d").hidden = !want3d;
+    renderer = to; to.resize();
+    to.focus(from.cam.x, from.cam.y, from === map2d ? Math.max(to.minZoom(), from.cam.zoom * 0.9) : Math.max(map2d.fit, from.cam.zoom));
+  }
+  $("viewToggle").textContent = want3d ? "2D" : "3D";
+  $("viewToggle").title = want3d ? "สลับเป็นแผนที่ 2D (V)" : "สลับเป็นมุมมอง 3D (V)";
+  $("rotGroup").hidden = !want3d;
+  settings.view3d = want3d; saveSettings();
+}
 let speed = 1, tool = "inspect", seedSpecies = null, activeTab = "upgrades", catchingUp = false;
 let selectedSettlement = null, chartHover = null;
 const incomeLog = []; // [time, dna, energy, knowledge]
@@ -77,7 +101,8 @@ function frame(now) {
   }
   while (tpsWindow.length && now - tpsWindow[0][0] > 1500) tpsWindow.shift();
   if (!catchingUp) { collect(); absorbEvents(); }
-  renderer.draw(now);
+  if (catchingUp) { requestAnimationFrame(frame); return; } // the overlay covers the map; give the CPU to the simulation
+  if (renderer === map3d) { map2d.tickTexture(); map3d.draw(now); } else map2d.draw(now);
   if (now - lastFast > 250) { lastFast = now; updateFast(); }
   if (now - lastHeavy > 1000) { lastHeavy = now; updateHeavy(); }
   requestAnimationFrame(frame);
@@ -102,7 +127,7 @@ function catchUp(seconds) {
   let done = 0;
   const chunk = () => {
     const start = performance.now();
-    while (done < ticks && performance.now() - start < 40) { sim.step(); done++; }
+    while (done < ticks && performance.now() - start < 80) { sim.step(); done++; }
     sim.drainEvents().slice(-30).forEach((e) => game.log(e.text, e.type));
     game.collect();
     $("catchupBar").style.width = (done / ticks * 100).toFixed(1) + "%";
@@ -217,7 +242,7 @@ function renderTools() {
   if (tool === "seed") hint = seedSpecies && sim.species.get(seedSpecies) ? `ปล่อย ${sim.species.get(seedSpecies).name} — คลิกบนแผนที่` : "เลือกสายพันธุ์ก่อน: คลิกสิ่งมีชีวิตแล้วกด “เลือกปล่อย”";
   if (tool === "inspect") hint = "คลิกสิ่งมีชีวิตหรือถิ่นฐานเพื่อดูรายละเอียด · ลากเพื่อเลื่อน · เลื่อนล้อเพื่อซูม";
   $("toolHint").textContent = hint;
-  $("world").classList.toggle("tool", tool !== "inspect");
+  $("world").classList.toggle("tool", tool !== "inspect"); $("world3d").classList.toggle("tool", tool !== "inspect");
 }
 
 function geneRows(g, avg, caps) {
@@ -259,7 +284,16 @@ function renderInspector() {
     <div class="insp-actions"><button class="mini-btn ${renderer.follow ? "on" : ""}" data-insp="follow">${renderer.follow ? "กำลังติดตาม" : "🎥 ติดตาม"}</button><button class="mini-btn ${seedSpecies === c.sp ? "on" : ""}" data-insp="seed">🧬 เลือกปล่อย</button><button class="mini-btn" data-insp="species">ดูสายพันธุ์</button></div>`);
 }
 
-function setHTML(el, html) { if (el._html !== html) { el.innerHTML = html; el._html = html; } }
+// Live panels refresh every second; never replace the element the user is in the middle of clicking.
+let pressTarget = null;
+document.addEventListener("pointerdown", (e) => { pressTarget = e.target; }, true);
+document.addEventListener("pointerup", () => setTimeout(() => { pressTarget = null; }, 0), true);
+document.addEventListener("pointercancel", () => { pressTarget = null; }, true);
+function setHTML(el, html) {
+  if (el._html === html) return;
+  if (pressTarget && el.contains(pressTarget)) return;
+  el.innerHTML = html; el._html = html;
+}
 
 // ------------------------------------------------------------ tab views (1 Hz)
 function updateHeavy() {
@@ -349,15 +383,20 @@ function renderLab() {
       ${pips(s.mutation, 10)}<div class="card-bottom" style="margin-top:12px"><span class="cost">${s.mutation >= 10 ? "สูงสุด" : fmt(game.mutationCost()) + " DNA"}</span><button class="buy-button" data-lab="mutation" ${s.mutation < 10 && s.res.dna >= game.mutationCost() ? "" : "disabled"}>กลายพันธุ์ ↗</button></div></div>
     <div class="panel lab-card"><span class="eyebrow">DIRECTIONAL SELECTION</span><h3>🎯 กำหนดแรงคัดเลือก</h3>
       <p>ผลักลูกที่เกิดใหม่ทั้งโลกไปทางลักษณะที่เลือกเป็นเวลา 90 วินาทีจำลอง · ${fmt(gc)} DNA ต่อครั้ง</p>
-      ${guide ? `<div class="active-guide">กำลังคัดเลือก: <b>${GENES[guide.gene].label} ${guide.dir > 0 ? "↑" : "↓"}</b> · เหลือ ${Math.ceil((guide.until - sim.tick) / TPS)} วินาที</div>` : ""}
+      ${guide ? `<div class="active-guide">กำลังคัดเลือก: <b>${GENES[guide.gene].label} ${guide.dir > 0 ? "↑" : "↓"}</b> · เหลือ <span id="guideLeft"></span> วินาที</div>` : ""}
       <div class="guide-grid">${GUIDE_GENES.map((g) => `<span>${GENES[g.gene].label}</span><button class="mini-btn" data-guide="${g.gene}" data-dir="1" title="${g.up}" ${s.res.dna >= gc ? "" : "disabled"}>↑ ${g.up}</button><button class="mini-btn" data-guide="${g.gene}" data-dir="-1" title="${g.down}" ${s.res.dna >= gc ? "" : "disabled"}>↓</button>`).join("")}</div></div>
     <div class="panel lab-card"><span class="eyebrow">MUTAGEN</span><h3>☢️ รังสีเร่งการกลายพันธุ์</h3>
       <p>45 วินาทีจำลองที่อัตรากลายพันธุ์สูงขึ้น 3 เท่า เหมาะเมื่อโลกเปลี่ยนแปลงเร็ว เช่น ยุคน้ำแข็ง</p>
-      ${mut ? `<div class="active-guide">กำลังทำงาน · เหลือ ${Math.ceil((P.mutagenUntil - sim.tick) / TPS)} วินาที</div>` : ""}
+      ${mut ? `<div class="active-guide">กำลังทำงาน · เหลือ <span id="mutagenLeft"></span> วินาที</div>` : ""}
       <div class="card-bottom"><span class="cost">${fmt(game.mutagenCost())} DNA</span><button class="buy-button" data-lab="mutagen" ${s.res.dna >= game.mutagenCost() ? "" : "disabled"}>ปล่อยรังสี</button></div></div>
     <div class="panel lab-card"><span class="eyebrow">GENE POOL</span><h3>🧬 ยีนเฉลี่ยของสิ่งมีชีวิตทั้งโลก</h3>
       <p>ดูว่าโลกกำลังวิวัฒนาการไปทางไหน แถบสีทองคือขีดจำกัดของยุคปัจจุบัน</p>
-      ${GENE_KEYS.map((k) => { const G = GENES[k], cap = capsFor(sim.era)[k]; const pct = (avg[k] - G.min) / (G.max - G.min) * 100; return `<div class="gene-row"><span>${G.label}</span><div class="gene-bar"><div style="width:${pct}%"></div>${cap !== undefined && cap < G.max ? `<i style="left:${(cap - G.min) / (G.max - G.min) * 100}%"></i>` : ""}</div><span>${k === "sense" ? Math.round(avg[k]) : avg[k].toFixed(2)}</span></div>`; }).join("")}</div>`);
+      <div id="genePool"></div></div>`);
+  // fast-changing numbers live in their own nodes so the buttons above stay put
+  if ($("guideLeft") && guide) $("guideLeft").textContent = Math.ceil((guide.until - sim.tick) / TPS);
+  if ($("mutagenLeft") && mut) $("mutagenLeft").textContent = Math.ceil((P.mutagenUntil - sim.tick) / TPS);
+  const pool = $("genePool");
+  if (pool) { pool._html = pool.innerHTML === "" ? "" : pool._html; setHTML(pool, GENE_KEYS.map((k) => { const G = GENES[k], cap = capsFor(sim.era)[k]; const pct = (avg[k] - G.min) / (G.max - G.min) * 100; return `<div class="gene-row"><span>${G.label}</span><div class="gene-bar"><div style="width:${pct}%"></div>${cap !== undefined && cap < G.max ? `<i style="left:${(cap - G.min) / (G.max - G.min) * 100}%"></i>` : ""}</div><span>${k === "sense" ? Math.round(avg[k]) : avg[k].toFixed(2)}</span></div>`; }).join("")); }
 }
 
 function renderTech() {
@@ -416,35 +455,47 @@ function renderCycle() {
 }
 
 // ------------------------------------------------------------ input
-const canvas = $("world");
 const pointers = new Map(); let drag = null, pinch = null;
-canvas.addEventListener("pointerdown", (e) => {
-  canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
-  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) }; drag = null; }
-  else drag = { x: e.offsetX, y: e.offsetY, sx: e.offsetX, sy: e.offsetY, moved: false };
-});
-canvas.addEventListener("pointermove", (e) => {
-  if (!pointers.has(e.pointerId)) return;
-  pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
-  if (pinch && pointers.size === 2) {
-    const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
-    renderer.zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinch.d); pinch.d = d; return;
-  }
-  if (!drag) return;
-  if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) > 5) { drag.moved = true; canvas.classList.add("dragging"); }
-  if (drag.moved) { renderer.pan(e.offsetX - drag.x, e.offsetY - drag.y); drag.x = e.offsetX; drag.y = e.offsetY; }
-});
-const endPointer = (e) => {
-  pointers.delete(e.pointerId);
-  if (pointers.size < 2) pinch = null;
-  canvas.classList.remove("dragging");
-  if (drag && !drag.moved && e.type === "pointerup") clickWorld(e.offsetX, e.offsetY);
-  drag = null;
-};
-canvas.addEventListener("pointerup", endPointer);
-canvas.addEventListener("pointercancel", endPointer);
-canvas.addEventListener("wheel", (e) => { e.preventDefault(); renderer.zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+function attachInput(canvas) {
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), ang: Math.atan2(b.y - a.y, b.x - a.x), my: (a.y + b.y) / 2 }; drag = null; }
+    else drag = { x: e.offsetX, y: e.offsetY, sx: e.offsetX, sy: e.offsetY, moved: false, rotate: renderer === map3d && (e.button === 2 || e.shiftKey) };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+    if (pinch && pointers.size === 2) {
+      const [a, b] = [...pointers.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      renderer.zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinch.d); pinch.d = d;
+      if (renderer === map3d) { // two-finger twist rotates, two-finger vertical drag tilts
+        const ang = Math.atan2(b.y - a.y, b.x - a.x), my = (a.y + b.y) / 2;
+        map3d.rotate(-(ang - pinch.ang), (my - pinch.my) * 0.005); pinch.ang = ang; pinch.my = my;
+      }
+      return;
+    }
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.offsetX - drag.sx, e.offsetY - drag.sy) > 5) { drag.moved = true; canvas.classList.add("dragging"); }
+    if (drag.moved) {
+      if (drag.rotate) map3d.rotate(-(e.offsetX - drag.x) * 0.006, (e.offsetY - drag.y) * 0.004);
+      else renderer.pan(e.offsetX - drag.x, e.offsetY - drag.y);
+      drag.x = e.offsetX; drag.y = e.offsetY;
+    }
+  });
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    canvas.classList.remove("dragging");
+    if (drag && !drag.moved && e.type === "pointerup" && e.button !== 2) clickWorld(e.offsetX, e.offsetY);
+    drag = null;
+  };
+  canvas.addEventListener("pointerup", endPointer);
+  canvas.addEventListener("pointercancel", endPointer);
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); renderer.zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+}
+attachInput($("world")); attachInput($("world3d"));
 
 function clickWorld(sx, sy) {
   const p = renderer.toWorld(sx, sy);
@@ -489,6 +540,8 @@ $("toolBar").addEventListener("click", (e) => {
 document.querySelectorAll(".speed-btn[data-speed]").forEach((b) => b.addEventListener("click", () => setSpeed(+b.dataset.speed)));
 function setSpeed(s) { speed = s; document.querySelectorAll(".speed-btn[data-speed]").forEach((b) => b.classList.toggle("active", +b.dataset.speed === s)); updateFast(); }
 $("fitButton").addEventListener("click", () => renderer.fitWorld());
+$("viewToggle").addEventListener("click", () => setView(renderer !== map3d));
+$("rotGroup").addEventListener("click", (e) => { const r = e.target.closest("[data-rot]"), t = e.target.closest("[data-tilt]"); if (!map3d) return; if (r) map3d.rotate(+r.dataset.rot * 0.5, 0); if (t) map3d.rotate(0, +t.dataset.tilt * 0.2); });
 $("minimap").addEventListener("click", (e) => { const r = e.target.getBoundingClientRect(); renderer.follow = false; renderer.focus((e.clientX - r.left) / r.width * 1920, (e.clientY - r.top) / r.height * 1080); });
 $("popChart").addEventListener("pointermove", (e) => { chartHover = e.offsetX; });
 $("popChart").addEventListener("pointerleave", () => { chartHover = null; });
@@ -527,6 +580,8 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); setSpeed(speed === 0 ? (setSpeed.prev || 1) : (setSpeed.prev = speed, 0)); }
   else if (["Digit1", "Digit2", "Digit3", "Digit4"].includes(e.code)) setSpeed([1, 3, 10, 30][+e.code.slice(-1) - 1]);
   else if (e.code === "KeyF") renderer.fitWorld();
+  else if (e.code === "KeyV") setView(renderer !== map3d);
+  else if ((e.code === "KeyQ" || e.code === "KeyE") && renderer === map3d) map3d.rotate(e.code === "KeyQ" ? -0.3 : 0.3, 0);
   else if (e.code === "Escape") { closeInspector(); tool = "inspect"; renderTools(); }
 });
 
@@ -537,7 +592,7 @@ window.addEventListener("beforeunload", () => game.save());
 document.addEventListener("visibilitychange", () => { if (document.hidden) game.save(); });
 
 function setGame(g) {
-  game = g; sim = g.sim; renderer.setSim(sim); closeInspector(); seedSpecies = null; acc = 0;
+  game = g; sim = g.sim; map2d.setSim(sim); if (map3d) map3d.setSim(sim); closeInspector(); seedSpecies = null; acc = 0;
   incomeLog.length = 0; game.save(); focusLife(); refreshNow();
 }
 $("exportSave").addEventListener("click", () => {
@@ -554,14 +609,14 @@ $("resetGame").addEventListener("click", () => ask("เริ่มเกมใ�
 $("settingsButton").addEventListener("click", () => $("settingsDialog").showModal());
 $("helpButton").addEventListener("click", () => $("helpDialog").showModal());
 $("weatherToggle").checked = settings.weather;
-$("weatherToggle").addEventListener("change", (e) => { settings.weather = e.target.checked; renderer.weather = settings.weather; saveSettings(); });
+$("weatherToggle").addEventListener("change", (e) => { settings.weather = e.target.checked; map2d.weather = settings.weather; if (map3d) map3d.weather = settings.weather; saveSettings(); });
 $("compactNumbers").checked = settings.compact; $("effectsToggle").checked = settings.effects; $("bgToggle").checked = settings.bg;
 $("compactNumbers").addEventListener("change", (e) => { settings.compact = e.target.checked; saveSettings(); refreshNow(); });
-$("effectsToggle").addEventListener("change", (e) => { settings.effects = e.target.checked; renderer.effects = settings.effects; document.body.classList.toggle("no-effects", !settings.effects); saveSettings(); });
+$("effectsToggle").addEventListener("change", (e) => { settings.effects = e.target.checked; map2d.effects = settings.effects; if (map3d) map3d.effects = settings.effects; document.body.classList.toggle("no-effects", !settings.effects); saveSettings(); });
 $("bgToggle").addEventListener("change", (e) => { settings.bg = e.target.checked; saveSettings(); });
 $("footerVersion").textContent = `ORIGIN v${VERSION} · Real-time evolution simulator`;
 window.addEventListener("resize", () => renderer.resize());
-new ResizeObserver(() => renderer.resize()).observe($("worldWrap"));
+new ResizeObserver(() => { map2d.resize(); if (map3d) map3d.resize(); }).observe($("worldWrap"));
 
 function focusLife() {
   const cs = sim.creatures;
@@ -572,10 +627,12 @@ function focusLife() {
 }
 
 // ------------------------------------------------------------ boot
-renderer.resize();
+map2d.resize();
+setView(settings.view3d && has3D);
+if (!has3D) $("viewToggle").hidden = true;
 focusLife();
 refreshNow();
 if (!settings.seenHelp) { $("helpDialog").showModal(); settings.seenHelp = true; saveSettings(); }
 if (restored && savedAt) catchUp((Date.now() - savedAt) / 1000);
 requestAnimationFrame(frame);
-window.__origin = { get game() { return game; }, get sim() { return sim; }, renderer, setSpeed };
+window.__origin = { get game() { return game; }, get sim() { return sim; }, get renderer() { return renderer; }, map2d, get map3d() { return map3d; }, setView, setSpeed };

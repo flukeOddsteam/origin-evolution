@@ -23,7 +23,8 @@
 
     <section class="stage">
       <div class="world-wrap panel" id="worldWrap">
-        <canvas id="world" aria-label="โลกจำลองแบบเรียลไทม์"></canvas>
+        <canvas id="world" aria-label="โลกจำลองแบบเรียลไทม์ (แผนที่ 2 มิติ)"></canvas>
+        <canvas id="world3d" aria-label="โลกจำลองแบบเรียลไทม์ (3 มิติ)" hidden></canvas>
         <div class="hud hud-tl">
           <div class="hud-era"><span id="hudEraIcon">🌊</span><div><small id="hudEraNum">ERA 01</small><strong id="hudEraName">มหาสมุทรแห่งจุดกำเนิด</strong></div></div>
           <div class="hud-clock"><span class="live-dot" id="liveDot"></span><span id="hudClock">00:00</span><span class="sep">·</span><span id="hudGen">รุ่นที่ 0</span></div>
@@ -35,7 +36,10 @@
           <button class="speed-btn" data-speed="10" title="10×">10×</button>
           <button class="speed-btn" data-speed="30" title="30×">30×</button>
           <span class="speed-real" id="speedReal"></span>
-          <button class="speed-btn" id="fitButton" title="มองทั้งโลก">⤢</button>
+          <button class="speed-btn" id="fitButton" title="มองทั้งโลก (F)">⤢</button>
+          <span class="hud-sep"></span>
+          <button class="speed-btn view-btn" id="viewToggle" title="สลับมุมมอง 2D / 3D (V)">3D</button>
+          <span class="rot-group" id="rotGroup" hidden><button class="speed-btn" data-rot="-1" title="หมุนซ้าย (Q)">⟲</button><button class="speed-btn" data-rot="1" title="หมุนขวา (E)">⟳</button><button class="speed-btn" data-tilt="1" title="มองจากด้านบน">⤒</button><button class="speed-btn" data-tilt="-1" title="มองแนวราบ">⤓</button></span>
         </div>
         <div class="hud hud-bl" role="toolbar" aria-label="เครื่องมือ">
           <div id="toolBar" class="tool-bar"></div>
@@ -110,7 +114,7 @@
       <div id="cycleContent"></div>
     </section>
 
-    <footer class="footer"><span id="footerVersion">ORIGIN v0.4.0 · Real-time evolution simulator</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
+    <footer class="footer"><span id="footerVersion">ORIGIN v0.5.0 · Real-time evolution simulator</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
   </main>
 
   <dialog id="settingsDialog" class="dialog"><form method="dialog">
@@ -133,7 +137,8 @@
       <li><b>คุณคือผู้วางแผนวิวัฒนาการ</b> — อัปเกรดโลก กำหนดแรงคัดเลือก ปลูกอาหาร เปลี่ยนภูมิอากาศ หรือส่งอุกกาบาต</li>
       <li><b>บรรลุเป้าหมายของยุค</b> แล้วใช้ DNA/ความรู้ปลดล็อกยุคใหม่ ยุคใหม่เปิดขีดจำกัดทางชีววิทยา เช่น ขึ้นบกได้ หรือฉลาดขึ้นได้</li>
       <li><b>เปิดทิ้งไว้ได้</b> — โลกเดินต่อในพื้นหลังและจำลองย้อนหลังเมื่อคุณกลับมา</li>
-      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิกการเลือก</li>
+      <li><b>มุมมอง 3D</b> กดปุ่ม 3D/2D มุมขวาบนเพื่อสลับ ใน 3D ลากเพื่อเลื่อน คลิกขวาหรือ Shift+ลากเพื่อหมุนกล้อง เลื่อนล้อเพื่อซูม</li>
+      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>V</kbd> สลับ 2D/3D · <kbd>Q</kbd>/<kbd>E</kbd> หมุนกล้อง · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิกการเลือก</li>
     </ul>
     <button class="primary-button full" value="close">เริ่มเลย</button>
   </form></dialog>
@@ -152,6 +157,7 @@
 
   <div class="catchup" id="catchup" hidden><div class="panel catchup-box"><strong>กำลังจำลองช่วงเวลาที่คุณไม่อยู่…</strong><div class="progress-track"><div class="progress-fill" id="catchupBar"></div></div><small class="muted" id="catchupText"></small></div></div>
   <div id="toast" class="toast" role="status"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script type="module" src="src/main.js"></script>
 </body>
 </html>

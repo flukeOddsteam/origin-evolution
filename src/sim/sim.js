@@ -716,7 +716,7 @@ export class Simulation {
       world: this.world.serialize(),
       geneKeys: GENE_KEYS, discovered: this.discovered || {}, nicheTried: this.nicheTried || {},
       creatures: this.creatures.map((c) => [c.id, r2(c.x), r2(c.y), r2(c.a), r4(c.e), c.age, c.sp, c.gen, c.cd, c.mig, ...GENE_KEYS.map((k) => r4(c.g[k])), r2(c.g.hue)]),
-      species: [...this.species.values()].filter((s) => s.extinct === null || s.peak >= 4 || s.children.length).map((s) => ({ ...s, hist: s.hist.slice(-30) })),
+      species: [...this.species.values()].filter((s) => s.extinct === null || s.peak >= 4 || s.children.length).map((s) => { const o = { ...s, hist: s.hist.slice(-30) }; for (const k in o) if (k[0] === "_") delete o[k]; return o; }),
       settlements: this.settlements,
       history: this.history.slice(-200),
     };
@@ -730,7 +730,7 @@ export class Simulation {
     Object.assign(s.climate, d.climate); s.climate.applied = -99;
     s.activeEvents = d.activeEvents || [];
     Object.assign(s.totals, d.totals);
-    for (const sp of d.species) s.species.set(sp.id, sp);
+    for (const sp of d.species) { for (const k in sp) if (k[0] === "_") delete sp[k]; s.species.set(sp.id, sp); } // drop cached render data
     s.settlements = d.settlements || [];
     s.history = d.history || [];
     const keys = d.geneKeys || GENE_KEYS.slice(0, 10), NK = keys.length;
