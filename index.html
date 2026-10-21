@@ -110,13 +110,14 @@
       <div id="cycleContent"></div>
     </section>
 
-    <footer class="footer"><span id="footerVersion">ORIGIN v0.3.0 · Real-time evolution simulator</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
+    <footer class="footer"><span id="footerVersion">ORIGIN v0.4.0 · Real-time evolution simulator</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
   </main>
 
   <dialog id="settingsDialog" class="dialog"><form method="dialog">
     <div class="dialog-head"><h2>ตั้งค่าเกม</h2><button class="icon-button" value="close">✕</button></div>
     <label class="setting-row"><span><strong>ตัวเลขแบบย่อ</strong><small>แสดง 12.5K แทน 12,500</small></span><input id="compactNumbers" type="checkbox" checked></label>
     <label class="setting-row"><span><strong>รายละเอียดภาพ</strong><small>รูปร่างสิ่งมีชีวิต พืช และเอฟเฟกต์ — ปิดเพื่อประหยัดเครื่อง</small></span><input id="effectsToggle" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>กลางวัน–กลางคืนและสภาพอากาศ</strong><small>เมฆ ฝน หิมะ และแสงเมืองยามค่ำ</small></span><input id="weatherToggle" type="checkbox" checked></label>
     <label class="setting-row"><span><strong>จำลองต่อเมื่อสลับแท็บ</strong><small>โลกยังเดินต่อแม้คุณไม่ได้ดูหน้านี้</small></span><input id="bgToggle" type="checkbox" checked></label>
     <p class="muted tiny">ข้อมูลเกมบันทึกในเบราว์เซอร์เครื่องนี้ ส่งออกเซฟไว้หากต้องการย้ายเครื่อง</p>
     <button class="primary-button full" value="close">เสร็จสิ้น</button>
@@ -126,6 +127,8 @@
     <div class="dialog-head"><h2>วิธีเล่น ORIGIN</h2><button class="icon-button" value="close">✕</button></div>
     <ul class="help-list">
       <li><b>ทุกจุดบนแผนที่คือสิ่งมีชีวิตจริง</b> — แต่ละตัวมียีน 10 ตัว ว่ายน้ำ เดิน หาอาหาร หนีผู้ล่า สืบพันธุ์ และตาย</li>
+      <li><b>สิ่งมีชีวิตกว่า 30 กลุ่ม</b> ตั้งแต่จุลชีพ แมงกะพรุน ปลา ฉลาม วาฬ แมลง กบ ไดโนเสาร์ นก ไปจนถึงช้าง เสือ และมนุษย์ ร่างกายเกิดจากยีนของมันเอง ดูทั้งหมดได้ในสารานุกรม</li>
+      <li><b>โลกมีไบโอมจริง</b> ป่าดิบชื้น ทะเลทราย สะวันนา ทุนดรา แนวปะการัง ป่าเคลป์ แม่น้ำ มีกลางวันกลางคืน เมฆ ฝน และหิมะ</li>
       <li><b>ลูกได้ยีนจากพ่อแม่พร้อมการกลายพันธุ์</b> ตัวที่เหมาะกับสิ่งแวดล้อมจะรอดและมีลูกมากกว่า เมื่อยีนห่างจากบรรพบุรุษมากพอจะเกิดสายพันธุ์ใหม่</li>
       <li><b>คุณคือผู้วางแผนวิวัฒนาการ</b> — อัปเกรดโลก กำหนดแรงคัดเลือก ปลูกอาหาร เปลี่ยนภูมิอากาศ หรือส่งอุกกาบาต</li>
       <li><b>บรรลุเป้าหมายของยุค</b> แล้วใช้ DNA/ความรู้ปลดล็อกยุคใหม่ ยุคใหม่เปิดขีดจำกัดทางชีววิทยา เช่น ขึ้นบกได้ หรือฉลาดขึ้นได้</li>

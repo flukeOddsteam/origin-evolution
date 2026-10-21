@@ -1,11 +1,11 @@
 // What evolution is allowed to reach in each era. Raising a cap is what "unlocking an era" means
 // for the living world: the genes can now drift further and new body plans become possible.
 export const ERA_CAPS = [
-  { size: 1.0, form: 0.2,  diet: 0.3, habitat: 0.3,  intellect: 0.05 }, // 0 primordial ocean
-  { size: 1.7, form: 0.42, diet: 1,   habitat: 0.3,  intellect: 0.1 },  // 1 cells — predation appears
-  { size: 3.2, form: 0.78, diet: 1,   habitat: 0.48, intellect: 0.25 }, // 2 multicellular
-  { size: 5,   form: 1,    diet: 1,   habitat: 1,    intellect: 0.5 },  // 3 land
-  { size: 6,   form: 1,    diet: 1,   habitat: 1,    intellect: 1 },    // 4 early humans
+  { size: 1.0, form: 0.2,  diet: 0.3, habitat: 0.3,  intellect: 0.05, armor: 0.2, warm: 0.2, wing: 0 }, // 0 primordial ocean
+  { size: 1.7, form: 0.42, diet: 1,   habitat: 0.3,  intellect: 0.1,  armor: 0.5, warm: 0.2, wing: 0 }, // 1 cells — predation appears
+  { size: 3.2, form: 0.78, diet: 1,   habitat: 0.48, intellect: 0.25, armor: 1,   warm: 0.3, wing: 0 }, // 2 multicellular
+  { size: 5,   form: 1,    diet: 1,   habitat: 1,    intellect: 0.5,  armor: 1,   warm: 1,   wing: 1 }, // 3 land
+  { size: 6,   form: 1,    diet: 1,   habitat: 1,    intellect: 1,    armor: 1,   warm: 1,   wing: 1 }, // 4 early humans
 ];
 export const capsFor = (era) => ERA_CAPS[Math.min(era, ERA_CAPS.length - 1)];
 

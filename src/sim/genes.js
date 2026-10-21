@@ -1,5 +1,5 @@
 // Genome definition, mutation and genetic distance.
-// Every gene is a plain number inside [min, max]; eras raise the caps (see ERA_CAPS in data.js).
+// Every gene is a plain number inside [min, max]; eras raise the caps (see ERA_CAPS in eras.js).
 
 export const GENES = {
   size:      { min: 0.6, max: 6,   label: "ขนาดตัว",            short: "ขนาด",   w: 1.0 },
@@ -12,7 +12,11 @@ export const GENES = {
   form:      { min: 0,   max: 1,   label: "ความซับซ้อนของร่าง",   short: "ซับซ้อน", w: 1.0 },
   fertility: { min: 0.1, max: 1,   label: "อัตราการสืบพันธุ์",    short: "สืบพันธุ์", w: 0.6 },
   longevity: { min: 0.5, max: 2,   label: "อายุขัย",              short: "อายุ",    w: 0.5 },
+  armor:     { min: 0,   max: 1,   label: "เกราะ / เปลือก",       short: "เกราะ",   w: 1.1 },
+  warm:      { min: 0,   max: 1,   label: "เลือดอุ่น",            short: "เลือดอุ่น", w: 1.1 },
+  wing:      { min: 0,   max: 1,   label: "ปีก / การบิน",         short: "ปีก",     w: 1.3 },
 };
+export const GENE_DEFAULTS = { armor: 0, warm: 0.1, wing: 0 };
 export const GENE_KEYS = Object.keys(GENES);
 const W_SUM = GENE_KEYS.reduce((a, k) => a + GENES[k].w, 0);
 
@@ -96,29 +100,27 @@ export const TIER_TH = {
   amphibian: "สัตว์ครึ่งบกครึ่งน้ำ", land: "สัตว์บก", sapient: "เผ่าพันธุ์ผู้มีปัญญา",
 };
 
-const PRE = ["Proto", "Archa", "Myxo", "Cyano", "Thala", "Plekto", "Vermi", "Ichthyo", "Hydro", "Litho", "Chloro", "Ammo", "Trilo", "Placo", "Dino", "Therio", "Ornitho", "Sauro", "Homo", "Pithe", "Lepto", "Mega", "Micro", "Xeno", "Cryo", "Pyro", "Nekto", "Bentho", "Rhizo", "Spiro"];
-const MID = ["", "", "la", "no", "ri", "ta", "mo", "ce", "ga", "lu"];
-const END = ["cella", "coccus", "zoa", "pod", "saurus", "therium", "ichthys", "morpha", "nautes", "phagus", "dromus", "bates", "venator", "pithecus", "gnathus", "cephalus", "ptera", "derma"];
-const EPI = ["primus", "minor", "major", "velox", "lentus", "ferox", "mitis", "aquaticus", "terrestris", "borealis", "australis", "rubra", "viridis", "glacialis", "tropicus", "magnus", "parvus", "astutus", "errans"];
+const EPI = ["primus", "minor", "major", "lentus", "mitis", "aquaticus", "terrestris", "borealis", "australis", "rubra", "viridis", "magnus", "parvus", "errans", "striatus", "maculatus", "gracilis", "robustus", "vulgaris", "elegans"];
 
-export function speciesName(g, sapient) {
+/** arch is the body-plan key from archetypes.js (genus chosen to read like that group). */
+export function speciesName(g, sapient, arch = "microbe", genusFor = null) {
   const pick = (a) => a[(Math.random() * a.length) | 0];
-  let genus = pick(PRE) + pick(MID) + pick(END);
-  if (sapient) genus = pick(["Homo", "Sapio", "Noeto", "Cogito"]) + pick(END.slice(12));
+  const genus = genusFor ? genusFor(arch) : "Proto" + pick(["cella", "coccus"]);
   let epi = pick(EPI);
-  if (g.diet > 0.62) epi = pick(["ferox", "venator", "rapax", "vorax", "ferox"]);
+  if (g.diet > 0.62) epi = pick(["ferox", "venator", "rapax", "vorax", "rex"]);
   else if (g.thermal < 0.3) epi = pick(["glacialis", "borealis", "frigidus"]);
   else if (g.thermal > 0.72) epi = pick(["tropicus", "ardens", "calidus"]);
   else if (g.speed > 2.4) epi = "velox";
-  else if (g.size > 3.5) epi = "magnus";
+  else if (g.size > 3.5) epi = pick(["magnus", "giganteus", "maximus"]);
   if (sapient) epi = pick(["sapiens", "sapiens", "astutus", "faber", "loquens"]);
   return genus.charAt(0).toUpperCase() + genus.slice(1) + " " + epi;
 }
 
-export function describeSpecies(g, sapient) {
-  const tier = tierOf(g, sapient);
-  const bits = [TIER_TH[tier]];
+export function describeSpecies(g, sapient, archTh) {
+  const bits = [archTh || TIER_TH[tierOf(g, sapient)]];
   bits.push(ROLE_TH[roleOf(g)]);
+  if (g.wing >= 0.5) bits.push("บินได้");
+  if (g.armor >= 0.5) bits.push("มีเกราะ");
   if (g.speed > 2.3) bits.push("ว่องไว");
   if (g.size > 3.2) bits.push("ตัวใหญ่");
   else if (g.size < 0.9) bits.push("ตัวจิ๋ว");

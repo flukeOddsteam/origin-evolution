@@ -93,7 +93,7 @@ export function civStep(sim, dt) {
     if (s.pop > SETTLEMENT_LEVELS[s.level].cap * (s.level ? 0.55 : 0.45) && sim.settlements.length < 70 && Math.random() < 0.05 * P.emigration * sec) {
       const sp = sim.species.get(s.sp);
       if (sp) {
-        const a = Math.random() * Math.PI * 2, d = 180 + Math.random() * 220;
+        const a = Math.random() * Math.PI * 2, d = 240 + Math.random() * 220;
         const tx = Math.max(10, Math.min(WORLD_W - 10, s.x + Math.cos(a) * d)), ty = Math.max(10, Math.min(WORLD_H - 10, s.y + Math.sin(a) * d));
         if (!w.isWater(w.idx(tx, ty))) {
           for (let m = 0; m < 4; m++) {

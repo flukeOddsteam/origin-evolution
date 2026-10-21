@@ -1,6 +1,7 @@
 // Agent-based ecosystem: every organism is an individual that moves, senses, eats, flees,
 // reproduces with mutation and dies. Species emerge from genetic divergence.
-import { GENES, GENE_KEYS, mutateGenes, geneDistance, blendGenes, roleOf, speciesName, describeSpecies, tierOf, gauss } from "./genes.js";
+import { GENES, GENE_KEYS, GENE_DEFAULTS, mutateGenes, clampGenes, geneDistance, blendGenes, roleOf, speciesName, describeSpecies, tierOf, gauss } from "./genes.js";
+import { ARCH, ARCH_KEYS, TEMPLATES, archetypeOf, genusFor } from "./archetypes.js";
 import { World, WORLD_W, WORLD_H, CELL, GW, GH } from "./world.js";
 import { capsFor } from "./eras.js";
 import { civStep, nearestSettlement } from "./civ.js";
@@ -49,7 +50,7 @@ export class Simulation {
     const s = new Simulation(seed);
     const root = {
       size: 0.75, speed: 0.7, sense: 38, diet: 0.06, habitat: 0.05, thermal: 0.62,
-      intellect: 0, form: 0.04, fertility: 0.6, longevity: 1, hue: 168,
+      intellect: 0, form: 0.04, fertility: 0.6, longevity: 1, armor: 0, warm: 0.1, wing: 0, hue: 168,
     };
     const sp = s.newSpecies(root, null);
     // seed the warm shallow seas
@@ -78,14 +79,24 @@ export class Simulation {
     const proto = !!(parent?.proto || parent?.sapient);
     const sp = {
       id: this.nextSpecies++, parent: parentId, children: [], c: { ...genes }, avg: { ...genes },
-      hue: genes.hue, name: speciesName(genes, sapient), born: this.tick, extinct: null,
+      hue: genes.hue, name: "", born: this.tick, extinct: null,
       count: 0, peak: 0, total: 0, sapient, proto, era: this.era, depth: parent ? parent.depth + 1 : 0,
-      desc: describeSpecies(genes, sapient), role: roleOf(genes), tier: tierOf(genes, sapient), hist: [],
+      hist: [], pattern: (Math.random() * 4) | 0,
     };
+    this.refreshSpecies(sp, true);
     if (parent) parent.children.push(sp.id);
     this.species.set(sp.id, sp);
     this.totals.species++;
     return sp;
+  }
+
+  /** Recompute body plan, role and description from the species' average genes. */
+  refreshSpecies(sp, rename = false) {
+    const g = sp.avg, arch = archetypeOf(g, sp.sapient, sp.proto);
+    if (rename || (sp.arch && sp.arch !== arch && (arch === "human" || ARCH[sp.arch]?.group !== ARCH[arch].group))) sp.name = speciesName(g, sp.sapient, arch, genusFor);
+    sp.arch = arch;
+    sp.role = roleOf(g); sp.tier = tierOf(g, sp.sapient);
+    sp.desc = describeSpecies(g, sp.sapient, ARCH[arch].th);
   }
 
   makeCreature(x, y, g, sp, energyFrac = 0.6, gen = 0) {
@@ -100,13 +111,15 @@ export class Simulation {
     c.r = 1.6 + g.size * 2.1;
     c.maxE = 2 + 4 * g.size * g.size;
     c.maxAge = (1100 + g.size * 260) * g.longevity;
-    c.spd = g.speed * 0.85;
+    c.fly = g.wing >= 0.5 && g.habitat >= 0.5 ? g.wing : 0;
+    c.spd = g.speed * 0.85 * (1 + 0.5 * c.fly) * (1 - 0.35 * g.armor);
     c.meat = Math.pow(g.diet, 1.3);
     c.veg = Math.pow(1 - g.diet, 1.3);
     c.hunter = g.diet >= 0.38;
     const brain = this.species.get(c.sp)?.proto || this.species.get(c.sp)?.sapient ? 0.0008 : 0.0018;
     c.base = (0.0019 * g.size + 0.0011 * g.speed * g.size) * (1 - 0.3 * g.form)
-      + g.sense * 0.000012 + g.intellect * brain * (0.5 + g.size * 0.3) + g.form * 0.0012;
+      + g.sense * 0.000012 + g.intellect * brain * (0.5 + g.size * 0.3) + g.form * 0.0012
+      + (0.0006 * g.armor + 0.0014 * g.warm + 0.0018 * c.fly) * g.size;
     // complex bodies digest better; on land in the age of tools, intelligence multiplies foraging
     const sapient = this.species.get(c.sp)?.sapient;
     const proto = this.species.get(c.sp)?.proto;
@@ -117,7 +130,10 @@ export class Simulation {
 
   suit(g, i) {
     const h = g.habitat;
-    if (this.world.isWater(i)) return h <= 0.3 ? 1 : Math.max(0, 1 - (h - 0.3) / 0.6);
+    if (this.world.isWater(i)) {
+      if (g.wing >= 0.5 && h >= 0.5) return 0.7; // fliers cross water
+      return h <= 0.3 ? 1 : Math.max(0, 1 - (h - 0.3) / 0.6);
+    }
     return h >= 0.65 ? 1 : Math.max(0, (h - 0.25) / 0.4);
   }
 
@@ -201,11 +217,12 @@ export class Simulation {
     // ---- metabolism
     const i = w.idx(c.x, c.y), s = this.suit(g, i);
     const dT = Math.abs(g.thermal - w.temp[i]);
-    const heat = dT > 0.12 ? (dT - 0.12) * (dT - 0.12) * 0.045 * (0.6 + 0.4 * g.size) : 0;
+    const heat = dT > 0.12 ? (dT - 0.12) * (dT - 0.12) * 0.045 * (0.6 + 0.4 * g.size) * (1 - 0.75 * g.warm) : 0;
     c.e -= (c.base + 0.0026 * step * step * g.size) * this.metabMult + heat + (1 - s) * 0.004;
 
     // ---- feeding
-    if (c.veg > 0.05 && c.e < c.maxE) {
+    const canGraze = w.isWater(i) ? g.habitat < 0.55 : g.habitat > 0.35; // fliers over the sea cannot eat plankton
+    if (c.veg > 0.05 && c.e < c.maxE && canGraze) {
       const b = w.bio[i];
       if (b > 0.01) {
         const bite = Math.min(b, 0.016 * (0.3 + g.size * 0.9) * (c.mode === MODE.GRAZE ? 1 : 0.35));
@@ -218,7 +235,9 @@ export class Simulation {
     if (c.mode === MODE.HUNT && c.prey && !c.prey.dead && c.atk === 0) {
       const p = c.prey;
       if (Math.hypot(p.x - c.x, p.y - c.y) < c.r + p.r + 1.5) {
-        const chance = 0.32 + 0.4 * (c.spd / (c.spd + p.spd + 0.01)) + g.intellect * 0.15 - p.g.intellect * 0.12;
+        let chance = 0.32 + 0.4 * (c.spd / (c.spd + p.spd + 0.01)) + g.intellect * 0.15 - p.g.intellect * 0.12;
+        chance *= 1 - 0.6 * p.g.armor;
+        if (p.fly && !c.fly) chance *= 0.5;
         if (Math.random() < chance) {
           const gain = (p.e * 0.7 + p.maxE * 0.6) * c.meat * (0.8 + 0.6 * g.form) * (c.tool > 1 ? 1.2 : 1);
           c.e = Math.min(c.maxE * 1.05, c.e + gain);
@@ -305,7 +324,7 @@ export class Simulation {
     if (total > P.capacity * 1.9) return;
     const g = c.g;
     // once towns exist, people mostly have children inside settlements rather than in the wild
-    if (this.era >= 5 && this.settlements.length >= 6 && this.species.get(c.sp)?.sapient && Math.random() < 0.75) { c.cd = 200; return; }
+    if (this.species.get(c.sp)?.sapient && (this.wildSapient || 0) > 40 + this.settlements.length * 3) { c.cd = 200; return; }
     const kids = g.fertility > 0.72 && g.size < 1.6 ? 2 : 1;
     const share = (c.e * 0.42 * P.offspring) / kids;
     c.e *= 0.5;
@@ -355,7 +374,7 @@ export class Simulation {
     } else if (era === 3) {
       const w = this.world;
       const coastal = pool.filter((c) => c.g.diet < 0.5 && c.g.form > 0.35 && this.nearLand(c));
-      innovate(pickFrom(coastal.length ? coastal : pool.filter((c) => c.g.diet < 0.5), 10), (g) => ({ habitat: 0.62, form: Math.max(g.form, 0.65), size: Math.max(g.size, 1.4) }), "🦎 {n} คลานขึ้นจากทะเล — สัตว์บกตัวแรกบุกเบิกผืนดิน");
+      innovate(pickFrom(coastal.length ? coastal : pool.filter((c) => c.g.diet < 0.5), 10), (g) => ({ habitat: 0.66, form: Math.max(g.form, 0.7), size: Math.max(g.size, 1.2), warm: 0.15, armor: 0.05, diet: 0.15 }), "🦎 {n} คลานขึ้นจากทะเล — สัตว์บกตัวแรกบุกเบิกผืนดิน");
       for (let i = 0; i < w.bio.length; i++) if (w.coast[i]) w.green[i] = Math.max(w.green[i], 0.6);
       this.emit("bloom", "🌱 พืชเริ่มยึดครองชายฝั่ง และจะค่อย ๆ แผ่ขยายเข้าสู่ใจกลางทวีป");
     } else if (era === 4) {
@@ -369,7 +388,7 @@ export class Simulation {
     const caps = this.caps;
     const g = { ...who[0].g, ...patch(who[0].g) };
     const sp = this.newSpecies(mutateGenes(g, { rate: 0, strength: 0, caps }), who[0].sp);
-    if (era >= 4 && g.intellect >= 0.5) sp.proto = true;
+    if (era >= 4 && g.intellect >= 0.5) { sp.proto = true; this.refreshSpecies(sp, true); }
     for (const c of who) {
       const cg = { ...c.g, ...patch(c.g) };
       c.g = mutateGenes(cg, { rate: 0.4, strength: 0.01, caps }); c.sp = sp.id; this.derive(c); c.e = c.maxE * 0.85;
@@ -388,7 +407,7 @@ export class Simulation {
     this.bloom(who[0].x, who[0].y, 130, 1.2); // they appear in a fertile valley
     this.protoAttempts = (this.protoAttempts || 0) + 1;
     const iq = Math.min(0.69, 0.57 + 0.04 * this.protoAttempts);
-    innovate(who, (g) => ({ intellect: Math.max(g.intellect, iq), longevity: Math.max(g.longevity, 1.3), fertility: 0.7, size: 1.4, diet: 0.46, habitat: Math.max(g.habitat, 0.78), form: 0.92, thermal: 0.6, sense: Math.max(g.sense, 70), speed: 1.1 }),
+    innovate(who, (g) => ({ intellect: Math.max(g.intellect, iq), longevity: Math.max(g.longevity, 1.3), fertility: 0.7, size: 1.4, diet: 0.46, habitat: Math.max(g.habitat, 0.78), form: 0.92, thermal: 0.6, sense: Math.max(g.sense, 70), speed: 1.1, warm: 0.85, armor: 0, wing: 0 }),
       "🐒 {n} เริ่มใช้เครื่องมือและสื่อสารกัน — บรรพบุรุษของผู้มีปัญญา");
   }
 
@@ -437,6 +456,7 @@ export class Simulation {
     if (cause === "eaten") this.totals.eaten++; else if (cause === "starved") this.totals.starved++; else if (cause === "aged") this.totals.aged++;
     const i = this.world.idx(c.x, c.y);
     if (cause !== "eaten") this.world.bio[i] += 0.08 * c.g.size; // decomposition returns nutrients
+    this.world.decay[i] = Math.min(2, this.world.decay[i] + 0.05 * c.g.size);
   }
 
   // ------------------------------------------------------------------ statistics
@@ -452,6 +472,9 @@ export class Simulation {
       const d = c.g.diet; roles[d >= 0.62 ? 2 : d >= 0.38 ? 1 : 0]++;
     }
     let alive = 0, H = 0;
+    const archCount = {};
+    this.wildSapient = 0;
+    for (const c of this.creatures) if (this.species.get(c.sp)?.sapient) this.wildSapient++;
     const n = this.creatures.length;
     for (const sp of this.species.values()) {
       if (sp.extinct !== null) continue;
@@ -466,11 +489,12 @@ export class Simulation {
         const p = cnt / n; H -= p * Math.log(p);
         if (!sp.sapient && this.era >= 4 && sp.avg.intellect >= 0.7 && sp.avg.habitat >= 0.55 && cnt >= 6) {
           sp.sapient = true;
-          sp.name = speciesName(sp.avg, true);
+          this.refreshSpecies(sp, true);
           for (const c of this.creatures) if (c.sp === sp.id) { const e = c.e; this.derive(c); c.e = e; }
           this.emit("sapient", `🧠 ${sp.name} ตระหนักรู้ในตัวเอง — เผ่าพันธุ์ผู้มีปัญญากลุ่มแรกถือกำเนิด`, { species: sp.id });
         }
-        sp.role = roleOf(sp.avg); sp.tier = tierOf(sp.avg, sp.sapient); sp.desc = describeSpecies(sp.avg, sp.sapient);
+        this.refreshSpecies(sp);
+        archCount[sp.arch] = (archCount[sp.arch] || 0) + cnt;
       } else if (this.tick - sp.born > 120) {
         sp.extinct = this.tick; this.totals.extinct++;
         if (sp.peak >= 8) this.emit("extinction", `💀 ${sp.name} สูญพันธุ์ (ประชากรสูงสุด ${sp.peak})`, { species: sp.id });
@@ -478,7 +502,12 @@ export class Simulation {
       sp.hist.push(cnt); if (sp.hist.length > 60) sp.hist.shift();
     }
     let civPop = 0; for (const s of this.settlements) civPop += s.pop;
-    this.stats = { n, roles, alive, civPop, biodiversity: H, plants: this.world.totalBio || 0, temp: this.climate.offset };
+    this.stats = { n, roles, alive, civPop, biodiversity: H, plants: this.world.totalBio || 0, temp: this.climate.offset, arch: archCount };
+    if (!this.discovered) this.discovered = {};
+    for (const k in archCount) if (archCount[k] >= 3 && !this.discovered[k]) {
+      this.discovered[k] = this.tick;
+      if (k !== "microbe") this.emit("discovery", `🔎 ค้นพบกลุ่มสิ่งมีชีวิตใหม่: ${ARCH[k].icon} ${ARCH[k].th}`, { arch: k });
+    }
     const top = [...this.species.values()].filter((s) => s.extinct === null && s.count > 0).sort((a, b) => b.count - a.count).slice(0, 7);
     const snap = { t: this.tick, n, plants: this.stats.plants, roles: [...roles], civ: civPop, sp: {} };
     let rest = n; for (const s of top) { snap.sp[s.id] = s.count; rest -= s.count; }
@@ -489,8 +518,57 @@ export class Simulation {
     this.recent.births.push([now, this.totals.births]); this.recent.deaths.push([now, this.totals.deaths]);
     while (this.recent.births.length && now - this.recent.births[0][0] > TICKS_PER_SECOND * 60) { this.recent.births.shift(); this.recent.deaths.shift(); }
     if (n === 0) this.rescue();
+    else if (this.era >= 1 && this.tick - (this.lastOcean || 0) > 6000) {
+      let sea = 0; for (const c of this.creatures) if (c.g.habitat < 0.4) sea++;
+      if (sea < 25) this.reseedOcean();
+    }
     if (this.era >= 4 && !this.settlements.length && this.tick - (this.lastProto || 0) > 4500 && ![...this.species.values()].some((s) => s.extinct === null && s.count > 0 && (s.proto || s.sapient))) this.spawnProto();
+    if (this.era >= 1 && n > 50 && this.tick - (this.lastNiche || 0) > 1200) this.fillNiche();
     if (n > 0 && this.era >= 1 && roles[2] + roles[1] < Math.max(4, n * 0.015) && this.tick - (this.lastPredatorSpawn || 0) > 4000) this.spawnPredators();
+  }
+
+  /** An empty body-plan niche is filled by a large mutation in a nearby lineage (adaptive radiation). */
+  fillNiche() {
+    this.lastNiche = this.tick;
+    if (!this.nicheTried) this.nicheTried = {};
+    const caps = this.caps, counts = this.stats.arch || {}, w = this.world;
+    const open = ARCH_KEYS.filter((k) => TEMPLATES[k] && ARCH[k].era <= this.era && !(counts[k] > 0) && this.tick - (this.nicheTried[k] ?? -1e9) > 8000);
+    for (let s = open.length - 1; s > 0; s--) { const j = (Math.random() * (s + 1)) | 0; [open[s], open[j]] = [open[j], open[s]]; }
+    for (const k of open) {
+      const where = ARCH[k].habitat;
+      const pool = this.creatures.filter((c) => {
+        if (c.dead) return false;
+        const sp = this.species.get(c.sp);
+        if (sp?.sapient || sp?.proto) return false;
+        const water = w.isWater(w.idx(c.x, c.y));
+        return where === "water" ? water && c.g.form >= 0.3 : where === "land" ? !water && c.g.habitat >= 0.6 : water ? this.nearLand(c) : w.coast[w.idx(c.x, c.y)];
+      });
+      if (pool.length < 8) continue;
+      const src = pool[(Math.random() * pool.length) | 0];
+      const test = clampGenes({ ...src.g, ...TEMPLATES[k] }, caps);
+      if (archetypeOf(test, false, false) !== k) { this.nicheTried[k] = this.tick; continue; }
+      const who = pool.filter((c) => c.sp === src.sp && Math.hypot(c.x - src.x, c.y - src.y) < 260).slice(0, 10);
+      if (who.length < 4) continue;
+      this.nicheTried[k] = this.tick;
+      this.bloom(src.x, src.y, 90, 0.8);
+      this.innovate(who, () => ({ ...TEMPLATES[k] }), `🧬 การแผ่กระจายพันธุ์: {n} — ${ARCH[k].icon} ${ARCH[k].th}กลุ่มแรกวิวัฒน์ขึ้น`);
+      return;
+    }
+  }
+
+  /** If the seas are emptied, hardy plankton-eaters recolonise them from refugia. */
+  reseedOcean() {
+    this.lastOcean = this.tick;
+    const caps = this.caps;
+    const g = clampGenes({ size: 1, speed: 1.4, sense: 50, diet: 0.12, habitat: 0.06, thermal: 0.55, intellect: 0, form: this.era >= 2 ? 0.7 : 0.15, fertility: 0.8, longevity: 1, armor: 0.05, warm: 0.1, wing: 0, hue: 195 }, caps);
+    const sp = this.newSpecies(g, null);
+    let made = 0;
+    for (let k = 0; k < 400 && made < 30; k++) {
+      const x = Math.random() * WORLD_W, y = Math.random() * WORLD_H, i = this.world.idx(x, y);
+      if (this.world.type[i] !== 1) continue;
+      this.creatures.push(this.makeCreature(x, y, mutateGenes(g, { rate: 0.5, strength: 0.02, caps }), sp.id, 0.8)); made++;
+    }
+    this.emit("innovation", `🐟 ${sp.name} กลับมาตั้งรกรากในทะเลที่ว่างเปล่า`, { species: sp.id });
   }
 
   /** Empty predator niche: a herbivore lineage turns carnivorous through a large mutation. */
@@ -520,7 +598,7 @@ export class Simulation {
   /** If life goes fully extinct, hardy spores survive in the deep sea so the game can continue. */
   rescue() {
     const caps = this.caps;
-    const g = { size: 0.8, speed: 0.8, sense: 40, diet: 0.05, habitat: 0.05, thermal: 0.55, intellect: 0, form: Math.min(caps.form, 0.1), fertility: 0.7, longevity: 1, hue: 200 };
+    const g = { size: 0.8, speed: 0.8, sense: 40, diet: 0.05, habitat: 0.05, thermal: 0.55, intellect: 0, form: Math.min(caps.form, 0.1), fertility: 0.7, longevity: 1, armor: 0, warm: 0.1, wing: 0, hue: 200 };
     const sp = this.newSpecies(g, null);
     for (let k = 0; k < 40; k++) {
       const x = Math.random() * WORLD_W, y = Math.random() * WORLD_H, i = this.world.idx(x, y);
@@ -636,6 +714,7 @@ export class Simulation {
       params: this.params, climate: this.climate, activeEvents: this.activeEvents, nextNatural: this.nextNatural,
       totals: this.totals, colonies: this.colonies, launches: this.launches,
       world: this.world.serialize(),
+      geneKeys: GENE_KEYS, discovered: this.discovered || {}, nicheTried: this.nicheTried || {},
       creatures: this.creatures.map((c) => [c.id, r2(c.x), r2(c.y), r2(c.a), r4(c.e), c.age, c.sp, c.gen, c.cd, c.mig, ...GENE_KEYS.map((k) => r4(c.g[k])), r2(c.g.hue)]),
       species: [...this.species.values()].filter((s) => s.extinct === null || s.peak >= 4 || s.children.length).map((s) => ({ ...s, hist: s.hist.slice(-30) })),
       settlements: this.settlements,
@@ -654,9 +733,12 @@ export class Simulation {
     for (const sp of d.species) s.species.set(sp.id, sp);
     s.settlements = d.settlements || [];
     s.history = d.history || [];
-    const NK = GENE_KEYS.length;
+    const keys = d.geneKeys || GENE_KEYS.slice(0, 10), NK = keys.length;
+    s.discovered = d.discovered || {}; s.nicheTried = d.nicheTried || {};
+    const fill = (g) => { for (const k of GENE_KEYS) if (g[k] === undefined || Number.isNaN(g[k])) g[k] = GENE_DEFAULTS[k] ?? GENES[k].min; return g; };
+    for (const sp of s.species.values()) { fill(sp.avg); fill(sp.c); if (sp.pattern === undefined) sp.pattern = sp.id % 4; s.refreshSpecies(sp, !sp.arch); }
     for (const a of d.creatures) {
-      const g = {}; GENE_KEYS.forEach((k, j) => (g[k] = a[10 + j])); g.hue = a[10 + NK];
+      const g = {}; keys.forEach((k, j) => (g[k] = a[10 + j])); g.hue = a[10 + NK]; fill(g);
       if (!s.species.has(a[6])) continue;
       const c = s.makeCreature(a[1], a[2], g, a[6], 0, a[7]);
       Object.assign(c, { id: a[0], a: a[3], e: a[4], age: a[5], cd: a[8], mig: a[9] });

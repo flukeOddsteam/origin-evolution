@@ -6,7 +6,7 @@ import { GENES } from "./sim/genes.js";
 
 export const SAVE_KEY = "originEvolutionSave_v3";
 const OLD_KEY = "originEvolutionSave_v2";
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 
 const BASE_PARAMS = { mutationRate: 0.28, mutationStrength: 0.045, plantGrowth: 1, plantCap: 1, metabolism: 1, capacity: 1100, offspring: 1, farmYield: 1, civGrowth: 1, knowledgeMult: 1, pollutionMult: 1, emigration: 1 };
 

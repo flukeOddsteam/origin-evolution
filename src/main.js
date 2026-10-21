@@ -5,6 +5,8 @@ import { GENES, GENE_KEYS, ROLE_TH, TIER_TH } from "./sim/genes.js";
 import { SETTLEMENT_LEVELS } from "./sim/eras.js";
 import { capsFor } from "./sim/eras.js";
 import { Renderer } from "./render.js";
+import { ARCH, ARCH_KEYS } from "./sim/archetypes.js";
+import { BIOMES } from "./sim/world.js";
 import { drawPopulationChart, drawLineChart, sparkSVG, ROLE_COLORS, ROLE_NAMES } from "./chart.js";
 
 const $ = (id) => document.getElementById(id);
@@ -12,14 +14,14 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const SETTINGS_KEY = "originSettings_v3";
 
 // ------------------------------------------------------------ state
-let settings = { compact: true, effects: true, bg: true, seenHelp: false };
+let settings = { compact: true, effects: true, bg: true, weather: true, seenHelp: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } };
 
 let { game, restored, savedAt } = Game.load();
 let sim = game.sim;
 const renderer = new Renderer($("world"), sim);
-renderer.effects = settings.effects;
+renderer.effects = settings.effects; renderer.weather = settings.weather;
 let speed = 1, tool = "inspect", seedSpecies = null, activeTab = "upgrades", catchingUp = false;
 let selectedSettlement = null, chartHover = null;
 const incomeLog = []; // [time, dna, energy, knowledge]
@@ -142,7 +144,7 @@ function updateFast() {
   $("hudEraIcon").textContent = era.icon;
   $("hudEraNum").textContent = `ERA ${String(sim.era + 1).padStart(2, "0")}`;
   $("hudEraName").textContent = era.name;
-  $("hudClock").textContent = simClock(sim.tick);
+  $("hudClock").textContent = `${simClock(sim.tick)} · ${renderer.night() > 0.5 ? "🌙" : "☀️"} ${renderer.dayLabel()}`;
   $("liveDot").classList.toggle("paused", speed === 0);
   const real = tpsWindow.reduce((a, [, n]) => a + n, 0) / 1.5 / TPS;
   $("speedReal").textContent = speed > 1 && real < speed * 0.8 ? `≈${real.toFixed(1)}×` : "";
@@ -249,7 +251,8 @@ function renderInspector() {
     return;
   }
   const tierTh = TIER_TH[sp ? sp.tier : "cell"];
-  setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen} · ${MODE_TH[c.mode]}</small><h3><span class="swatch" style="background:hsl(${c.g.hue | 0},62%,60%)"></span> ${esc(sp?.name || "?")}</h3><small>${esc(sp?.desc || tierTh)}</small></div><button class="icon-button" data-insp="close">✕</button></div>
+  const arch = ARCH[sp?.arch] || ARCH.microbe, biome = BIOMES[sim.world.biome[sim.world.idx(c.x, c.y)]];
+  setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen} · ${MODE_TH[c.mode]}</small><h3><span class="arch-icon">${arch.icon}</span> ${esc(sp?.name || "?")}</h3><small>${esc(sp?.desc || tierTh)}</small><small class="insp-where">${biome.icon} อยู่ที่${biome.name}</small></div><button class="icon-button" data-insp="close">✕</button></div>
     <div class="insp-meta"><div>พลังงาน<b>${Math.round(c.e / c.maxE * 100)}%</b></div><div>อายุ<b>${Math.round(c.age / c.maxAge * 100)}%</b></div><div>บทบาท<b>${ROLE_TH[c.g.diet >= 0.62 ? "carnivore" : c.g.diet >= 0.38 ? "omnivore" : "herbivore"]}</b></div><div>สายพันธุ์นี้<b>${fmt(sp?.count || 0)} ตัว</b></div></div>
     ${geneRows(c.g, sp?.avg, capsFor(sim.era))}
     <p class="tiny muted">แถบสีทอง = ค่าเฉลี่ยของสายพันธุ์</p>
@@ -284,6 +287,7 @@ function renderUpgrades() {
 function traitChips(a) {
   const out = [];
   out.push(`ขนาด ${a.size.toFixed(1)}`); out.push(`เร็ว ${a.speed.toFixed(1)}`);
+  if (a.wing >= 0.5) out.push("บินได้"); if (a.armor >= 0.5) out.push("มีเกราะ"); if (a.warm >= 0.5) out.push("เลือดอุ่น");
   if (a.habitat > 0.6) out.push("บก"); else if (a.habitat > 0.35) out.push("ครึ่งบกครึ่งน้ำ"); else out.push("น้ำ");
   out.push(`ปัญญา ${(a.intellect * 100).toFixed(0)}`);
   return out.map((t) => `<span class="chip">${t}</span>`).join("");
@@ -293,7 +297,7 @@ function renderSpecies() {
   const alive = [...sim.species.values()].filter((s) => s.extinct === null && s.count > 0).sort((a, b) => b.count - a.count);
   $("speciesCount").textContent = `มีชีวิต ${alive.length} · เคยเกิดขึ้น ${fmt(sim.totals.species)} · สูญพันธุ์ ${fmt(sim.totals.extinct)}`;
   setHTML($("speciesList"), alive.slice(0, 40).map((s) => `<article class="sp-card ${seedSpecies === s.id ? "selected" : ""}">
-    <span class="sp-dot" style="background:${spColor(s)}"></span>
+    <span class="sp-dot" style="background:${spColor(s)}" title="${esc(ARCH[s.arch]?.th || "")}">${ARCH[s.arch]?.icon || ""}</span>
     <div class="sp-name">${esc(s.name)}${s.sapient ? "<em>ผู้มีปัญญา</em>" : ""}</div>
     <div class="sp-count">${fmt(s.count)}<small>ตัว</small></div>
     <div class="sp-desc">${esc(s.desc)} · เกิดเมื่อ ${simClock(s.born)}</div>
@@ -395,10 +399,12 @@ function renderArchive() {
   const extinct = [...sim.species.values()].filter((x) => x.extinct !== null && x.peak >= 20).sort((a, b) => b.peak - a.peak).slice(0, 12);
   setHTML($("archiveContent"),
     `<article class="archive-card wide"><div class="record-grid">${rec.map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${fmt(v)}</strong></div>`).join("")}</div></article>` +
+    `<h3 class="archive-title">สารานุกรมสิ่งมีชีวิต · ค้นพบ ${Object.keys(sim.discovered || {}).length} / ${ARCH_KEYS.length} กลุ่ม</h3>` +
+    `<article class="archive-card wide"><div class="ency-grid">${ARCH_KEYS.map((k) => { const found = sim.discovered?.[k] !== undefined, alive = sim.stats.arch?.[k] || 0; return `<div class="ency ${found ? "" : "locked"}" title="${found ? esc(ARCH[k].group) : "ยังไม่ค้นพบ"}"><span>${found ? ARCH[k].icon : "❔"}</span><b>${found ? ARCH[k].th : "???"}</b><small>${found ? (alive ? fmt(alive) + " ตัวตอนนี้" : "สูญพันธุ์แล้ว") : "ERA " + (ARCH[k].era + 1) + "+"}</small></div>`; }).join("")}</div></article>` +
     `<h3 class="archive-title">ยุคสมัย</h3>` +
     ERAS.map((e, i) => { const r = reached.get(i); return `<article class="archive-card ${r ? "" : "locked"}"><div class="archive-symbol">${r ? e.icon : "🔒"}</div><div><small>ERA ${String(i + 1).padStart(2, "0")}${r ? ` · ${simClock(r.tick)}` : ""}</small><h3>${r ? e.name : "ยุคที่ยังไม่ค้นพบ"}</h3><p>${r ? e.description : "วิวัฒนาการต่อไปเพื่อเปิดเผยประวัติศาสตร์"}</p></div></article>`; }).join("") +
     `<h3 class="archive-title">สายพันธุ์ที่สูญพันธุ์ไปแล้ว</h3>` +
-    (extinct.length ? extinct.map((x) => `<article class="archive-card"><span class="sp-dot" style="background:${spColor(x, 40)};width:22px;height:22px"></span><div><small>${simClock(x.born)} – ${simClock(x.extinct)}</small><h3>${esc(x.name)}</h3><p>${esc(x.desc)} · ประชากรสูงสุด ${x.peak}</p></div></article>`).join("") : `<p class="muted">ยังไม่มีสายพันธุ์ใหญ่ที่สูญพันธุ์</p>`));
+    (extinct.length ? extinct.map((x) => `<article class="archive-card"><span class="sp-dot" style="background:${spColor(x, 40)};width:30px;height:30px">${ARCH[x.arch]?.icon || ""}</span><div><small>${simClock(x.born)} – ${simClock(x.extinct)}</small><h3>${esc(x.name)}</h3><p>${esc(x.desc)} · ประชากรสูงสุด ${x.peak}</p></div></article>`).join("") : `<p class="muted">ยังไม่มีสายพันธุ์ใหญ่ที่สูญพันธุ์</p>`));
 }
 
 function renderCycle() {
@@ -547,6 +553,8 @@ $("importFile").addEventListener("change", async (e) => {
 $("resetGame").addEventListener("click", () => ask("เริ่มเกมใหม่?", "โลกและความคืบหน้าปัจจุบันจะถูกลบ เศษซากจักรวาลยังอยู่", "เริ่มใหม่").then((ok) => { if (ok) setGame(Game.newGame(game.state.prestige, game.state.cycles)); }));
 $("settingsButton").addEventListener("click", () => $("settingsDialog").showModal());
 $("helpButton").addEventListener("click", () => $("helpDialog").showModal());
+$("weatherToggle").checked = settings.weather;
+$("weatherToggle").addEventListener("change", (e) => { settings.weather = e.target.checked; renderer.weather = settings.weather; saveSettings(); });
 $("compactNumbers").checked = settings.compact; $("effectsToggle").checked = settings.effects; $("bgToggle").checked = settings.bg;
 $("compactNumbers").addEventListener("change", (e) => { settings.compact = e.target.checked; saveSettings(); refreshNow(); });
 $("effectsToggle").addEventListener("change", (e) => { settings.effects = e.target.checked; renderer.effects = settings.effects; document.body.classList.toggle("no-effects", !settings.effects); saveSettings(); });

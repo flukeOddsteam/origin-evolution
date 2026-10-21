@@ -12,6 +12,7 @@ for (let t = 1; t <= ticks; t++) {
     const st = sim.stats, alive = [...sim.species.values()].filter((s) => s.extinct === null && s.count > 0).sort((a, b) => b.count - a.count);
     const avg = (k) => (sim.creatures.reduce((a, c) => a + c.g[k], 0) / Math.max(1, sim.creatures.length)).toFixed(2);
     console.log(`t=${t} (${(t / 30 / 60).toFixed(1)}min) era=${sim.era} n=${st.n} roles=${st.roles} species=${st.alive} totalSp=${sim.totals.species} plants=${st.plants.toFixed(0)} size=${avg("size")} form=${avg("form")} diet=${avg("diet")} hab=${avg("habitat")} int=${avg("intellect")} spd=${avg("speed")} T=${sim.climate.offset.toFixed(2)} settl=${sim.settlements.length} civ=${st.civPop.toFixed(0)} dna=${sim.out.dna.toFixed(0)} kn=${sim.out.knowledge.toFixed(0)} | ${((performance.now() - t0) / t).toFixed(2)}ms/tick`);
+    console.log("   arch:", Object.entries(st.arch || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ":" + v).join(" "));
     console.log("   top:", alive.slice(0, 5).map((s) => `${s.name}[${s.count}] ${s.desc}`).join(" | "));
   }
 }
