@@ -4,3 +4,5 @@ Thumbs.db
 .idea/
 *.log
 .env
+*.png
+!assets/**/*.png

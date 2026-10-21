@@ -2,7 +2,8 @@
 <html lang="th">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="claude:viewport-fit-sides" content="cover">
   <meta name="theme-color" content="#080e1b">
   <title>ORIGIN — Evolution Simulator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -138,6 +139,12 @@
     <div class="dialog-head"><h2>ยินดีต้อนรับกลับ</h2></div>
     <div id="welcomeBody"></div>
     <button class="primary-button full" value="close">กลับสู่โลก</button>
+  </form></dialog>
+
+  <dialog id="confirmDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2 id="confirmTitle">ยืนยัน</h2></div>
+    <p id="confirmText" class="muted"></p>
+    <div class="confirm-actions"><button class="secondary-button" value="cancel">ยกเลิก</button><button class="primary-button" value="ok" id="confirmOk">ยืนยัน</button></div>
   </form></dialog>
 
   <div class="catchup" id="catchup" hidden><div class="panel catchup-box"><strong>กำลังจำลองช่วงเวลาที่คุณไม่อยู่…</strong><div class="progress-track"><div class="progress-fill" id="catchupBar"></div></div><small class="muted" id="catchupText"></small></div></div>

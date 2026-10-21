@@ -10,7 +10,7 @@ body{font-family:"IBM Plex Sans Thai",system-ui,sans-serif;min-height:100vh;over
 button{font:inherit;color:inherit}
 kbd{font:600 11px "Space Grotesk",sans-serif;background:#1b2840;border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
 .muted{color:var(--muted)}.tiny{font-size:12px}.mt{margin-top:16px}
-.app-shell{max-width:1440px;margin:auto;padding:18px 20px 28px}
+.app-shell{max-width:1440px;margin:auto;padding-block:18px 28px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:14px}
 .brand{display:flex;gap:12px;align-items:center;text-decoration:none;color:var(--text)}
 .brand-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:linear-gradient(140deg,#76e4ba,#81b8ff);color:#061323;font-size:24px;box-shadow:0 7px 25px #5ed4b329}
@@ -238,7 +238,7 @@ body.no-effects .tick-item{animation:none}
   .mini-card{display:none}
 }
 @media (max-width:760px){
-  .app-shell{padding:12px 16px 24px}
+  .app-shell{padding-block:12px 24px}
   .world-wrap{height:62vh;min-height:420px}
   .side{grid-template-columns:1fr}
   .resource-grid{grid-template-columns:repeat(2,1fr)}
@@ -255,3 +255,4 @@ body.no-effects .tick-item{animation:none}
 }
 
 .panel h3.mt{margin-top:18px}
+.confirm-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}.confirm-actions .primary-button{width:auto}

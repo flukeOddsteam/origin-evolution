@@ -28,6 +28,16 @@ const simClock = (tick) => { const s = Math.floor(tick / TPS), h = Math.floor(s 
 const tempC = (off) => (15 + off * 40).toFixed(1) + "°C";
 const spColor = (sp, l = 60) => `hsl(${sp.hue | 0},62%,${l}%)`;
 
+/** In-page confirmation (native confirm() is unavailable in some embeds). */
+function ask(title, text, okLabel = "ยืนยัน") {
+  return new Promise((resolve) => {
+    const d = $("confirmDialog");
+    $("confirmTitle").textContent = title; $("confirmText").textContent = text; $("confirmOk").textContent = okLabel;
+    d.returnValue = "";
+    d.addEventListener("close", () => resolve(d.returnValue === "ok"), { once: true });
+    d.showModal();
+  });
+}
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove("show"), 2400); }
 function result(r, okMsg) { if (r === true) { if (okMsg) toast(okMsg); refreshNow(); return true; } toast(r); return false; }
 
@@ -494,8 +504,7 @@ $("speciesList").addEventListener("click", (e) => {
 $("climateRow").addEventListener("click", (e) => { const b = e.target.closest("[data-climate]"); if (b) result(game.climate(+b.dataset.climate)); });
 $("cycleContent").addEventListener("click", (e) => {
   if (!e.target.closest("#prestigeButton") || !game.canPrestige()) return;
-  if (!confirm(`เริ่มจักรวาลใหม่เพื่อรับเศษซาก ${game.prestigeGain()} ชิ้น? โลกปัจจุบันจะถูกแทนที่ด้วยดาวดวงใหม่`)) return;
-  setGame(game.prestige()); toast("จักรวาลใหม่ถือกำเนิดแล้ว");
+  ask("เริ่มวัฏจักรใหม่?", `รับเศษซากจักรวาล ${game.prestigeGain()} ชิ้น โลกปัจจุบันจะถูกแทนที่ด้วยดาวดวงใหม่`, "เริ่มจักรวาลใหม่").then((ok) => { if (ok) { setGame(game.prestige()); toast("จักรวาลใหม่ถือกำเนิดแล้ว"); } });
 });
 
 function switchTab(tab, scroll = false) {
@@ -535,7 +544,7 @@ $("importFile").addEventListener("change", async (e) => {
   try { setGame(Game.importJSON(await file.text())); toast("นำเข้าเซฟสำเร็จ"); } catch { toast("ไฟล์เซฟไม่ถูกต้อง (รองรับเซฟ v0.3)"); }
   e.target.value = "";
 });
-$("resetGame").addEventListener("click", () => { if (confirm("เริ่มเกมใหม่? โลกและความคืบหน้าปัจจุบันจะถูกลบ (เศษซากจักรวาลยังอยู่)")) setGame(Game.newGame(game.state.prestige, game.state.cycles)); });
+$("resetGame").addEventListener("click", () => ask("เริ่มเกมใหม่?", "โลกและความคืบหน้าปัจจุบันจะถูกลบ เศษซากจักรวาลยังอยู่", "เริ่มใหม่").then((ok) => { if (ok) setGame(Game.newGame(game.state.prestige, game.state.cycles)); }));
 $("settingsButton").addEventListener("click", () => $("settingsDialog").showModal());
 $("helpButton").addEventListener("click", () => $("helpDialog").showModal());
 $("compactNumbers").checked = settings.compact; $("effectsToggle").checked = settings.effects; $("bgToggle").checked = settings.bg;
