@@ -1,10 +1,9 @@
-import { ERAS, RESOURCES, UPGRADES, TECHS, POWERS, GUIDE_GENES } from "./data.js";
+import { ERAS, UPGRADES, TECHS, POWERS, GUIDE_GENES } from "./data.js";
 import { Game, format, RES_TH, VERSION } from "./game.js";
 import { TICKS_PER_SECOND as TPS, MODE_TH } from "./sim/sim.js";
 import { GENES, GENE_KEYS, ROLE_TH, TIER_TH } from "./sim/genes.js";
-import { SETTLEMENT_LEVELS } from "./sim/eras.js";
-import { capsFor } from "./sim/eras.js";
-import { Renderer } from "./render.js";
+import { SETTLEMENT_LEVELS, capsFor } from "./sim/eras.js";
+import { Renderer, DAY_TICKS } from "./render.js";
 import { Renderer3D, webglAvailable } from "./render3d.js";
 import { ARCH, ARCH_KEYS } from "./sim/archetypes.js";
 import { BIOMES } from "./sim/world.js";
@@ -15,9 +14,11 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const SETTINGS_KEY = "originSettings_v3";
 
 // ------------------------------------------------------------ state
-let settings = { compact: true, effects: true, bg: true, weather: true, view3d: true, seenHelp: false };
+let settings = { compact: true, effects: true, bg: true, weather: true, view3d: true, theme: "dark", seenHelp: false };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}); } catch { /* storage unavailable */ }
 const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } };
+function applyTheme() { document.documentElement.dataset.uiTheme = settings.theme; }
+applyTheme();
 
 let { game, restored, savedAt } = Game.load();
 let sim = game.sim;
@@ -46,11 +47,12 @@ function setView(want3d) {
   $("rotGroup").hidden = !want3d;
   settings.view3d = want3d; saveSettings();
 }
-let speed = 1, tool = "inspect", seedSpecies = null, activeTab = "upgrades", catchingUp = false;
+let speed = 1, tool = "inspect", seedSpecies = null, activeTab = "map", catchingUp = false, logFilter = "all";
 let selectedSettlement = null, chartHover = null;
 const incomeLog = []; // [time, dna, energy, knowledge]
 const fmt = (n) => format(n, settings.compact);
 const simClock = (tick) => { const s = Math.floor(tick / TPS), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60; return h ? `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`; };
+const calDate = (tick) => { const day = Math.floor(tick / DAY_TICKS); return { year: Math.floor(day / 100) + 1, day: (day % 100) + 1 }; };
 const tempC = (off) => (15 + off * 40).toFixed(1) + "°C";
 const spColor = (sp, l = 60) => `hsl(${sp.hue | 0},62%,${l}%)`;
 
@@ -69,11 +71,13 @@ function result(r, okMsg) { if (r === true) { if (okMsg) toast(okMsg); refreshNo
 
 // ------------------------------------------------------------ simulation loop
 function absorbEvents() {
+  let any = false;
   for (const e of sim.drainEvents()) {
-    game.log(e.text, e.type);
+    game.log(e.text, e.type); any = true;
     if (e.type === "speciation") { if (performance.now() - (absorbEvents.lastSp || 0) < 5000) continue; absorbEvents.lastSp = performance.now(); }
     ticker(e.text, e.type);
   }
+  if (any) renderLog();
 }
 function collect() {
   const g = game.collect();
@@ -102,7 +106,8 @@ function frame(now) {
   while (tpsWindow.length && now - tpsWindow[0][0] > 1500) tpsWindow.shift();
   if (!catchingUp) { collect(); absorbEvents(); }
   if (catchingUp) { requestAnimationFrame(frame); return; } // the overlay covers the map; give the CPU to the simulation
-  if (renderer === map3d) { map2d.tickTexture(); map3d.draw(now); } else map2d.draw(now);
+  if (activeTab !== "map") map2d.tickTexture(); // keep the minimap fresh without drawing the hidden world
+  else if (renderer === map3d) { map2d.tickTexture(); map3d.draw(now); } else map2d.draw(now);
   if (now - lastFast > 250) { lastFast = now; updateFast(); }
   if (now - lastHeavy > 1000) { lastHeavy = now; updateHeavy(); }
   requestAnimationFrame(frame);
@@ -154,78 +159,128 @@ function catchUp(seconds) {
   chunk();
 }
 
-// ------------------------------------------------------------ ticker & HUD
-function ticker(text, type) {
+
+// ------------------------------------------------------------ message log (right column)
+const LOG_STYLE = {
+  speciation: ["has-info", "evo"], innovation: ["has-special", "evo"], discovery: ["has-special", "evo"], sapient: ["has-special", "evo"], era: ["has-warning", "evo"],
+  extinction: ["has-danger", "death"], disease: ["has-danger", "death"], meteor: ["has-danger", "death"], ruin: ["has-danger", "civ"],
+  climate: ["has-caution", "climate"], bloom: ["has-success", "climate"],
+  settlement: ["has-warning", "civ"], space: ["has-warning", "civ"],
+  upgrade: ["has-link", "you"], tech: ["has-link", "you"], guide: ["has-link", "you"], power: ["has-link", "you"], info: ["", "you"],
+};
+function renderLog() {
+  const rows = game.state.log.filter((l) => logFilter === "all" || (LOG_STYLE[l.type] || ["", "you"])[1] === logFilter).slice(0, 120);
+  setHTML($("msgLog"), rows.map((l) => `<p class="msg ${(LOG_STYLE[l.type] || [""])[0]}"><time>${simClock(l.t)}</time>${esc(l.text)}</p>`).join("") || `<p class="msg muted">ยังไม่มีเหตุการณ์ในหมวดนี้</p>`);
+}
+function ticker(text, type) { // phones only (the log column is below the fold there)
   const box = $("ticker");
+  if (getComputedStyle(box).display === "none") return;
   const el = document.createElement("div");
-  el.className = "tick-item " + type; el.textContent = text;
+  el.className = "tick-item"; el.textContent = text;
   box.appendChild(el);
-  while (box.children.length > 4) box.firstChild.remove();
-  setTimeout(() => el.remove(), 8200);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), 6800);
 }
 
+// ------------------------------------------------------------ Evolve-style action buttons + tooltips
+/** o = { attrs, name, cost?, count?, can, locked?, done?, on?, tip } — tip is a key resolved by tipHTML() on hover. */
+function action(o) {
+  const cls = ["action-btn", o.small ? "small" : "", o.locked ? "locked" : "", o.done ? "done" : "", !o.locked && !o.done && !o.can ? "cna" : "", o.on ? "on" : ""].join(" ");
+  return `<button class="${cls}" ${o.attrs || ""} ${o.tip ? `data-tip="${esc(o.tip)}"` : ""} ${o.locked ? "aria-disabled=\"true\"" : ""}><span class="aname">${o.name}</span>${o.cost ? `<span class="acost">${o.cost}</span>` : ""}${o.count !== undefined ? `<span class="count">${o.count}</span>` : ""}</button>`;
+}
+const costLine = (amount, res) => { const have = game.state.res[res] >= amount; return `<div class="tt-row"><span>${RES_TH[res]}</span><span class="${have ? "" : "has-danger"}">${fmt(amount)}</span></div>`; };
+function tipHTML(key) {
+  const [kind, id, extra] = key.split(":");
+  if (kind === "upgrade") {
+    const u = UPGRADES.find((x) => x.id === id), n = game.state.upgrades[id] || 0;
+    if (!u) return "";
+    return `<div class="tt-title">${u.icon} ${u.name} <span class="muted">${n}/${u.max}</span></div><div class="tt-desc">${u.desc}</div>${sim.era < u.era ? `<div class="has-danger">ปลดล็อกใน ERA ${u.era + 1}</div>` : n >= u.max ? `<div class="has-success">ถึงระดับสูงสุดแล้ว</div>` : costLine(game.upgradeCost(u), u.res)}`;
+  }
+  if (kind === "tech") {
+    const t = TECHS.find((x) => x.id === id);
+    if (!t) return "";
+    return `<div class="tt-title">${t.icon} ${t.name}</div><div class="tt-desc">${t.desc}</div><div class="tt-effect">${t.bonus}</div>${game.state.techs[id] ? `<div class="has-success">วิจัยแล้ว</div>` : sim.era < t.era ? `<div class="has-danger">ปลดล็อกใน ERA ${t.era + 1}</div>` : costLine(t.cost, "knowledge")}`;
+  }
+  if (kind === "mutation") return `<div class="tt-title">🧪 เพิ่มอัตราการกลายพันธุ์</div><div class="tt-desc">ลูกกลายพันธุ์บ่อยและแรงขึ้น ปรับตัวเร็วขึ้นและแตกสายพันธุ์บ่อยขึ้น แต่ลูกที่ด้อยกว่าก็มากขึ้น · DNA +6% ต่อระดับ</div>${game.state.mutation >= 10 ? `<div class="has-success">ถึงระดับสูงสุดแล้ว</div>` : costLine(game.mutationCost(), "dna")}`;
+  if (kind === "mutagen") return `<div class="tt-title">☢️ รังสีเร่งการกลายพันธุ์</div><div class="tt-desc">45 วินาทีจำลองที่อัตรากลายพันธุ์สูงขึ้น 3 เท่า เหมาะเมื่อโลกเปลี่ยนเร็ว เช่น ยุคน้ำแข็ง</div>${costLine(game.mutagenCost(), "dna")}`;
+  if (kind === "guide") { const g = GUIDE_GENES.find((x) => x.gene === id); return `<div class="tt-title">🎯 ${GENES[id].label} ${+extra > 0 ? "↑" : "↓"}</div><div class="tt-desc">${+extra > 0 ? g.up : g.down} — ผลักลูกที่เกิดใหม่ทั้งโลกไปทางนี้เป็นเวลา 90 วินาทีจำลอง</div>${costLine(game.guideCost(), "dna")}`; }
+  if (kind === "climate") return `<div class="tt-title">${+id > 0 ? "🔥 ทำให้โลกอุ่นขึ้น" : "❄️ ทำให้โลกเย็นลง"}</div><div class="tt-desc">เปลี่ยนอุณหภูมิทั้งโลก ไบโอมจะเลื่อนตาม สิ่งมีชีวิตที่ทนไม่ได้ต้องปรับตัวหรือสูญพันธุ์</div>${costLine(game.climateCost(), "energy")}`;
+  if (kind === "evolve") { const e = ERAS[sim.era]; return `<div class="tt-title">${e.icon} → ${ERAS[sim.era + 1]?.icon || "✧"} ${ERAS[sim.era + 1]?.name || ""}</div><div class="tt-desc">${e.unlock}</div>`; }
+  if (kind === "prestige") return `<div class="tt-title">🌌 เริ่มวัฏจักรใหม่</div><div class="tt-desc">สร้างดาวดวงใหม่ รับเศษซากจักรวาล ${game.prestigeGain()} ชิ้นเป็นโบนัสถาวร</div>`;
+  return "";
+}
+let tipEl = null;
+function showTip(el) {
+  const html = tipHTML(el.dataset.tip);
+  const tt = $("tooltip");
+  if (!html) { tt.hidden = true; return; }
+  tt.innerHTML = html; tt.hidden = false; tipEl = el;
+  const r = el.getBoundingClientRect(), w = tt.offsetWidth, h = tt.offsetHeight;
+  let x = r.left + r.width / 2 - w / 2, y = r.top - h - 8;
+  if (y < 4) y = r.bottom + 8;
+  tt.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, x)) + "px"; tt.style.top = y + "px";
+}
+document.addEventListener("pointerover", (e) => { const el = e.target.closest?.("[data-tip]"); if (el && e.pointerType === "mouse") showTip(el); else if (!el) { $("tooltip").hidden = true; tipEl = null; } });
+document.addEventListener("focusin", (e) => { const el = e.target.closest?.("[data-tip]"); if (el) showTip(el); });
+document.addEventListener("focusout", () => { $("tooltip").hidden = true; tipEl = null; });
+
+// ------------------------------------------------------------ top bar, resources, era (4 Hz)
 function updateFast() {
   const era = ERAS[sim.era];
-  $("hudEraIcon").textContent = era.icon;
-  $("hudEraNum").textContent = `ERA ${String(sim.era + 1).padStart(2, "0")}`;
-  $("hudEraName").textContent = era.name;
-  $("hudClock").textContent = `${simClock(sim.tick)} · ${renderer.night() > 0.5 ? "🌙" : "☀️"} ${renderer.dayLabel()}`;
+  $("topEraIcon").textContent = era.icon; $("topEraName").textContent = era.name;
+  const d = calDate(sim.tick);
+  $("calYear").textContent = `ปีที่ ${d.year}`; $("calDay").textContent = `วันที่ ${d.day}`;
+  $("calSky").textContent = `${renderer.night() > 0.5 ? "🌙" : "☀️"} ${renderer.dayLabel()}`;
+  $("calTemp").textContent = tempC(sim.climate.offset);
+  $("calTemp").className = sim.climate.offset < -0.08 ? "has-info" : sim.climate.offset > 0.08 ? "has-danger" : "has-warning";
   $("liveDot").classList.toggle("paused", speed === 0);
   const real = tpsWindow.reduce((a, [, n]) => a + n, 0) / 1.5 / TPS;
   $("speedReal").textContent = speed > 1 && real < speed * 0.8 ? `≈${real.toFixed(1)}×` : "";
 
-  // resources
-  const r = rates();
-  const pop = sim.creatures.length + sim.stats.civPop;
-  $("resourceGrid").innerHTML = RESOURCES.map((res) => {
-    const val = res.id === "population" ? pop : game.state.res[res.id];
-    const sub = res.id === "population" ? `${fmt(sim.creatures.length)} ตัวในธรรมชาติ${sim.stats.civPop ? ` · ${fmt(sim.stats.civPop)} ในเมือง` : ""}` : `+${fmt(r[res.id])} / วินาที`;
-    return `<article class="resource-card ${res.color}"><div class="resource-icon">${res.icon}</div><div class="resource-meta"><span>${res.name}</span><strong>${fmt(val)}</strong><small>${sub}</small></div></article>`;
-  }).join("");
-
-  // stats
-  const st = sim.stats;
-  const stats = [
-    ["สิ่งมีชีวิต", fmt(st.n)], ["สายพันธุ์", fmt(st.alive)], ["อุณหภูมิ", tempC(sim.climate.offset)],
-    ["เกิด / นาที", fmt(sim.ratePerMinute("births"))], ["ตาย / นาที", fmt(sim.ratePerMinute("deaths"))],
-    sim.era >= 4 ? ["ถิ่นฐาน", fmt(sim.settlements.length)] : ["ถูกล่า", fmt(sim.totals.eaten)],
-  ];
-  $("statGrid").innerHTML = stats.map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${v}</strong></div>`).join("");
-
-  // chart
-  const hi = drawPopulationChart($("popChart"), sim.history, chartHover);
-  const tip = $("chartTip");
-  if (hi >= 0) {
-    const s = sim.history[hi], ago = (sim.tick - s.t) / TPS;
-    tip.hidden = false;
-    tip.innerHTML = `<div class="muted">${ago < 2 ? "ตอนนี้" : simClock(ago * TPS) + " ที่แล้ว"}</div>` + ROLE_NAMES.map((n, i) => `<div><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${ROLE_COLORS[i]}"></i> ${n} <b>${s.roles[i]}</b></div>`).join("") + `<div>รวม <b>${s.n}</b></div>`;
-    tip.style.left = Math.min(chartHover + 10, $("popChart").clientWidth - 150) + "px";
-  } else tip.hidden = true;
-  $("popLegend").innerHTML = ROLE_NAMES.map((n, i) => `<span><i style="background:${ROLE_COLORS[i]}"></i>${n} <b>${st.roles[i]}</b></span>`).join("");
-  renderer.drawMinimap($("minimap"));
-
+  renderResources();
   renderEra();
-  renderTools();
-  renderInspector();
+  if (activeTab === "map") { renderTools(); renderInspector(); }
+  if (activeTab === "stats") renderStatsLive();
+  renderer.drawMinimap($("minimap"));
+  if (tipEl && document.body.contains(tipEl)) showTip(tipEl);
+}
+
+function renderResources() {
+  const r = rates(), st = sim.stats;
+  const row = (name, val, rate, title = "") => `<div class="res-row" ${title ? `title="${esc(title)}"` : ""}><span class="rname">${name}</span><span class="rval">${val}</span><span class="rrate ${rate && rate.startsWith("-") ? "neg" : ""}">${rate || ""}</span></div>`;
+  let html = `<div class="res-group">ทรัพยากร</div>`;
+  html += row("🧬 DNA", fmt(game.state.res.dna), `+${fmt(r.dna)}/s`, "ได้จากการเกิดและสายพันธุ์ใหม่");
+  html += row("⚡ พลังงาน", fmt(game.state.res.energy), `+${fmt(r.energy)}/s`, "ได้จากการกินและการสังเคราะห์แสง");
+  if (sim.era >= 4 || game.state.res.knowledge > 0) html += row("🔬 ความรู้", fmt(game.state.res.knowledge), `+${fmt(r.knowledge)}/s`, "ได้จากถิ่นฐานของผู้มีปัญญา");
+  html += `<div class="res-group">ชีวมณฑล</div>`;
+  html += row("สิ่งมีชีวิต", fmt(st.n), "");
+  html += row("สายพันธุ์", fmt(st.alive), "");
+  html += row("กินพืช", fmt(st.roles[0]), ""); html += row("กินทั้งพืชและสัตว์", fmt(st.roles[1]), ""); html += row("ผู้ล่า", fmt(st.roles[2]), "");
+  html += row("ชีวมวลพืช", fmt(st.plants), "");
+  html += row("เกิด", fmt(sim.ratePerMinute("births")), "/นาที"); html += row("ตาย", fmt(sim.ratePerMinute("deaths")), "/นาที");
+  if (sim.era >= 4) {
+    html += `<div class="res-group">อารยธรรม</div>`;
+    html += row("ประชากรเมือง", fmt(st.civPop), ""); html += row("ถิ่นฐาน", fmt(sim.settlements.length), "");
+    if (sim.era >= 9) html += row("อาณานิคม", fmt(sim.colonies), "");
+  }
+  if (game.state.prestige) html += `<div class="res-group">ถาวร</div>` + row("🌌 เศษซากจักรวาล", fmt(game.state.prestige), "");
+  setHTML($("resourceList"), html);
 }
 
 function renderEra() {
   const era = ERAS[sim.era];
   $("eraNumber").textContent = `ERA ${String(sim.era + 1).padStart(2, "0")}`;
   $("eraType").textContent = era.type;
-  $("eraTitle").textContent = era.name;
+  $("eraTitle").textContent = `${era.icon} ${era.name}`;
   $("eraDescription").textContent = era.description;
-  const goals = game.goals();
   const cost = game.eraCost();
-  let html = goals.map((g) => `<div class="goal ${g.done ? "done" : ""}"><div class="goal-label"><span>${g.done ? "✓ " : ""}${g.label}</span><strong>${fmt(Math.min(g.cur, g.need))} / ${fmt(g.need)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.min(100, g.cur / g.need * 100)}%"></div></div></div>`).join("");
-  if (cost) for (const [k, v] of Object.entries(cost)) {
-    const have = game.state.res[k], ok = have >= v;
-    html += `<div class="goal ${ok ? "done" : ""}"><div class="goal-label"><span>${ok ? "✓ " : ""}ใช้${RES_TH[k]}</span><strong>${fmt(Math.min(have, v))} / ${fmt(v)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.min(100, have / v * 100)}%"></div></div></div>`;
-  }
-  setHTML($("goalList"), html);
+  const rowsHTML = game.goals().map((g) => [g.label, g.cur, g.need, g.done]);
+  if (cost) for (const [k, v] of Object.entries(cost)) rowsHTML.push([`ใช้${RES_TH[k]}`, game.state.res[k], v, game.state.res[k] >= v]);
+  setHTML($("goalList"), rowsHTML.map(([label, cur, need, done]) => `<div class="goal ${done ? "done" : ""}"><span>${done ? "✓ " : ""}${label}</span><b>${fmt(Math.min(cur, need))} / ${fmt(need)}</b><div class="meter"><i style="width:${Math.min(100, cur / need * 100)}%"></i></div></div>`).join(""));
   const can = game.canEvolve();
   $("evolveButton").disabled = !can;
-  $("evolveButton").textContent = cost ? (can ? `🧬 วิวัฒนาการสู่ยุคถัดไป →` : "🧬 วิวัฒนาการขั้นต่อไป") : "✧ วิวัฒนาการถึงขีดสุดแล้ว";
+  $("evolveButton").textContent = cost ? (can ? `วิวัฒนาการสู่ ${ERAS[sim.era + 1].name}` : "วิวัฒนาการขั้นต่อไป") : "วิวัฒนาการถึงขีดสุดแล้ว";
+  $("evolveButton").dataset.tip = cost ? "evolve" : "";
   $("evolveHint").textContent = cost ? `ปลดล็อก: ${era.unlock}` : "เริ่มวัฏจักรใหม่เพื่อสร้างจักรวาลที่ยิ่งใหญ่กว่าเดิม";
 }
 
@@ -240,7 +295,7 @@ function renderTools() {
   const p = POWERS.find((x) => x.id === tool);
   let hint = p.hint;
   if (tool === "seed") hint = seedSpecies && sim.species.get(seedSpecies) ? `ปล่อย ${sim.species.get(seedSpecies).name} — คลิกบนแผนที่` : "เลือกสายพันธุ์ก่อน: คลิกสิ่งมีชีวิตแล้วกด “เลือกปล่อย”";
-  if (tool === "inspect") hint = "คลิกสิ่งมีชีวิตหรือถิ่นฐานเพื่อดูรายละเอียด · ลากเพื่อเลื่อน · เลื่อนล้อเพื่อซูม";
+  if (tool === "inspect") hint = renderer === map3d ? "คลิกเพื่อดูรายละเอียด · ลากเพื่อเลื่อน · คลิกขวาลากเพื่อหมุน · ล้อเมาส์ซูม" : "คลิกเพื่อดูรายละเอียด · ลากเพื่อเลื่อน · ล้อเมาส์ซูม";
   $("toolHint").textContent = hint;
   $("world").classList.toggle("tool", tool !== "inspect"); $("world3d").classList.toggle("tool", tool !== "inspect");
 }
@@ -258,11 +313,11 @@ function renderInspector() {
   const c = renderer.selected;
   if (selectedSettlement) {
     const s = sim.settlements.find((x) => x.id === selectedSettlement.id);
-    if (!s) { box.innerHTML = `<div class="insp-head"><h3>ถิ่นฐานถูกทิ้งร้างแล้ว</h3><button class="icon-button" data-insp="close">✕</button></div>`; return; }
+    if (!s) { setHTML(box, `<div class="insp-head"><h3>ถิ่นฐานถูกทิ้งร้างแล้ว</h3><button class="top-btn" data-insp="close">✕</button></div>`); return; }
     const sp = sim.species.get(s.sp);
-    setHTML(box, `<div class="insp-head"><div><small>${SETTLEMENT_LEVELS[s.level].name}</small><h3>🏘️ ${esc(s.name)}</h3></div><button class="icon-button" data-insp="close">✕</button></div>
-      <div class="insp-meta"><div>ประชากร<b>${fmt(s.pop)}</b></div><div>สูงสุด<b>${fmt(s.peak)}</b></div><div>ก่อตั้งเมื่อ<b>${simClock(s.born)}</b></div><div>ท่าอวกาศ<b>${s.port ? "มี" : "—"}</b></div></div>
-      <p class="tiny muted">${sp ? `<span class="swatch" style="background:${spColor(sp)}"></span> ${esc(sp.name)}` : ""}<br>ถิ่นฐานหาอาหารจากพื้นที่รอบ ๆ ${sim.era >= 5 ? "เปลี่ยนป่าเป็นไร่นา " : ""}ล่าสัตว์ป่า สร้างความรู้ และส่งผู้อพยพไปสร้างเมืองใหม่</p>`);
+    setHTML(box, `<div class="insp-head"><div><small>${SETTLEMENT_LEVELS[s.level].name}</small><h3>🏘️ ${esc(s.name)}</h3></div><button class="top-btn" data-insp="close">✕</button></div>
+      <div class="insp-meta"><div>ประชากร<b>${fmt(s.pop)}</b></div><div>สูงสุด<b>${fmt(s.peak)}</b></div><div>ก่อตั้ง<b>${simClock(s.born)}</b></div><div>ท่าอวกาศ<b>${s.port ? "มี" : "—"}</b></div></div>
+      <p class="muted small">${sp ? `${ARCH[sp.arch]?.icon || ""} ${esc(sp.name)}<br>` : ""}ถิ่นฐานหาอาหารจากพื้นที่รอบ ๆ ${sim.era >= 5 ? "เปลี่ยนป่าเป็นไร่นา " : ""}ล่าสัตว์ป่า สร้างความรู้ และส่งผู้อพยพไปสร้างเมืองใหม่</p>`);
     return;
   }
   if (!c) { box.hidden = true; return; }
@@ -270,18 +325,17 @@ function renderInspector() {
   const sp = sim.species.get(c.sp);
   if (c.dead) {
     const causes = { eaten: "ถูกล่า", starved: "อดอาหาร", aged: "ตายตามอายุขัย", other: "ภัยธรรมชาติ" };
-    setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen}</small><h3>${c.joined ? "เข้าร่วมถิ่นฐานแล้ว" : "สิ่งมีชีวิตตัวนี้ตายแล้ว"}</h3></div><button class="icon-button" data-insp="close">✕</button></div>
-      <p class="tiny muted">${c.joined ? "ย้ายไปอาศัยในเมือง" : "สาเหตุ: " + (causes[c.cause] || "ไม่ทราบ")} · อายุ ${Math.round(c.age / TPS)} วินาที</p>
-      <div class="insp-actions">${sp && sp.count > 0 ? `<button class="mini-btn" data-insp="another">ติดตามตัวอื่นในสายพันธุ์</button>` : ""}<button class="mini-btn" data-insp="close">ปิด</button></div>`);
+    setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen}</small><h3>${c.joined ? "เข้าร่วมถิ่นฐานแล้ว" : "สิ่งมีชีวิตตัวนี้ตายแล้ว"}</h3></div><button class="top-btn" data-insp="close">✕</button></div>
+      <p class="muted small">${c.joined ? "ย้ายไปอาศัยในเมือง" : "สาเหตุ: " + (causes[c.cause] || "ไม่ทราบ")} · อายุ ${Math.round(c.age / TPS)} วินาที</p>
+      <div class="insp-actions">${sp && sp.count > 0 ? action({ attrs: 'data-insp="another"', name: "ติดตามตัวอื่น", can: true, small: true }) : ""}${action({ attrs: 'data-insp="close"', name: "ปิด", can: true, small: true })}</div>`);
     return;
   }
-  const tierTh = TIER_TH[sp ? sp.tier : "cell"];
   const arch = ARCH[sp?.arch] || ARCH.microbe, biome = BIOMES[sim.world.biome[sim.world.idx(c.x, c.y)]];
-  setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen} · ${MODE_TH[c.mode]}</small><h3><span class="arch-icon">${arch.icon}</span> ${esc(sp?.name || "?")}</h3><small>${esc(sp?.desc || tierTh)}</small><small class="insp-where">${biome.icon} อยู่ที่${biome.name}</small></div><button class="icon-button" data-insp="close">✕</button></div>
-    <div class="insp-meta"><div>พลังงาน<b>${Math.round(c.e / c.maxE * 100)}%</b></div><div>อายุ<b>${Math.round(c.age / c.maxAge * 100)}%</b></div><div>บทบาท<b>${ROLE_TH[c.g.diet >= 0.62 ? "carnivore" : c.g.diet >= 0.38 ? "omnivore" : "herbivore"]}</b></div><div>สายพันธุ์นี้<b>${fmt(sp?.count || 0)} ตัว</b></div></div>
+  setHTML(box, `<div class="insp-head"><div><small>#${c.id} · รุ่นที่ ${c.gen} · ${MODE_TH[c.mode]}</small><h3><span class="arch-icon">${arch.icon}</span> ${esc(sp?.name || "?")}</h3><small>${esc(sp?.desc || TIER_TH.cell)}</small><small class="insp-where">${biome.icon} อยู่ที่${biome.name}</small></div><button class="top-btn" data-insp="close">✕</button></div>
+    <div class="insp-meta"><div>พลังงาน<b>${Math.round(c.e / c.maxE * 100)}%</b></div><div>อายุ<b>${Math.round(c.age / c.maxAge * 100)}%</b></div><div>บทบาท<b>${ROLE_TH[c.g.diet >= 0.62 ? "carnivore" : c.g.diet >= 0.38 ? "omnivore" : "herbivore"]}</b></div><div>ในสายพันธุ์<b>${fmt(sp?.count || 0)}</b></div></div>
     ${geneRows(c.g, sp?.avg, capsFor(sim.era))}
-    <p class="tiny muted">แถบสีทอง = ค่าเฉลี่ยของสายพันธุ์</p>
-    <div class="insp-actions"><button class="mini-btn ${renderer.follow ? "on" : ""}" data-insp="follow">${renderer.follow ? "กำลังติดตาม" : "🎥 ติดตาม"}</button><button class="mini-btn ${seedSpecies === c.sp ? "on" : ""}" data-insp="seed">🧬 เลือกปล่อย</button><button class="mini-btn" data-insp="species">ดูสายพันธุ์</button></div>`);
+    <p class="muted small">ขีดสีเหลือง = ค่าเฉลี่ยของสายพันธุ์</p>
+    <div class="insp-actions">${action({ attrs: 'data-insp="follow"', name: renderer.follow ? "กำลังติดตาม" : "🎥 ติดตาม", can: true, small: true, on: renderer.follow })}${action({ attrs: 'data-insp="seed"', name: "🧬 เลือกปล่อย", can: true, small: true, on: seedSpecies === c.sp })}${action({ attrs: 'data-insp="species"', name: "ดูสายพันธุ์", can: true, small: true })}</div>`);
 }
 
 // Live panels refresh every second; never replace the element the user is in the middle of clicking.
@@ -302,6 +356,7 @@ function updateHeavy() {
   else if (activeTab === "mutation") renderLab();
   else if (activeTab === "technology") renderTech();
   else if (activeTab === "world") renderWorld();
+  else if (activeTab === "stats") renderStatsLive();
   else if (activeTab === "archive") renderArchive();
   else if (activeTab === "cycle") renderCycle();
   const gen = sim.creatures.reduce((m, c) => Math.max(m, c.gen), 0);
@@ -309,35 +364,33 @@ function updateHeavy() {
 }
 function refreshNow() { updateFast(); updateHeavy(); }
 
-function pips(n, max) { return `<div class="level-pips">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? "on" : ""}"></i>`).join("")}</div>`; }
-
 function renderUpgrades() {
   setHTML($("upgradeGrid"), UPGRADES.map((u) => {
-    const n = game.state.upgrades[u.id] || 0, locked = sim.era < u.era, maxed = n >= u.max, cost = game.upgradeCost(u), can = !locked && !maxed && game.state.res[u.res] >= cost;
-    return `<article class="card ${locked ? "locked" : ""}"><div class="card-top"><div class="item-icon">${u.icon}</div><div><h3>${u.name}</h3><span>${locked ? `🔒 ปลดล็อกใน ERA ${u.era + 1}` : `ระดับ ${n} / ${u.max}`}</span></div></div><p>${u.desc}</p>${pips(n, u.max)}<div class="card-bottom"><span class="cost">${maxed ? "สูงสุด" : `${fmt(cost)} ${RES_TH[u.res]}`}</span><button class="buy-button" data-upgrade="${u.id}" ${can ? "" : "disabled"}>${maxed ? "✓" : "พัฒนา ↗"}</button></div></article>`;
+    const n = game.state.upgrades[u.id] || 0, locked = sim.era < u.era, maxed = n >= u.max, cost = game.upgradeCost(u);
+    return action({ attrs: `data-upgrade="${u.id}"`, name: `${u.icon} ${u.name}`, cost: locked ? `🔒 ERA ${u.era + 1}` : maxed ? "สูงสุด" : `${fmt(cost)} ${RES_TH[u.res]}`, count: n, can: game.state.res[u.res] >= cost, locked, done: maxed, tip: `upgrade:${u.id}` });
   }).join(""));
 }
 
 function traitChips(a) {
-  const out = [];
-  out.push(`ขนาด ${a.size.toFixed(1)}`); out.push(`เร็ว ${a.speed.toFixed(1)}`);
-  if (a.wing >= 0.5) out.push("บินได้"); if (a.armor >= 0.5) out.push("มีเกราะ"); if (a.warm >= 0.5) out.push("เลือดอุ่น");
-  if (a.habitat > 0.6) out.push("บก"); else if (a.habitat > 0.35) out.push("ครึ่งบกครึ่งน้ำ"); else out.push("น้ำ");
-  out.push(`ปัญญา ${(a.intellect * 100).toFixed(0)}`);
+  const out = [`ขนาด ${a.size.toFixed(1)}`, `เร็ว ${a.speed.toFixed(1)}`];
+  if (a.wing >= 0.5) out.push("บินได้"); if (a.armor >= 0.5) out.push("เกราะ"); if (a.warm >= 0.5) out.push("เลือดอุ่น");
+  out.push(a.habitat > 0.6 ? "บก" : a.habitat > 0.35 ? "ครึ่งบกครึ่งน้ำ" : "น้ำ");
+  if (a.intellect > 0.2) out.push(`ปัญญา ${(a.intellect * 100).toFixed(0)}`);
   return out.map((t) => `<span class="chip">${t}</span>`).join("");
 }
 
 function renderSpecies() {
   const alive = [...sim.species.values()].filter((s) => s.extinct === null && s.count > 0).sort((a, b) => b.count - a.count);
-  $("speciesCount").textContent = `มีชีวิต ${alive.length} · เคยเกิดขึ้น ${fmt(sim.totals.species)} · สูญพันธุ์ ${fmt(sim.totals.extinct)}`;
-  setHTML($("speciesList"), alive.slice(0, 40).map((s) => `<article class="sp-card ${seedSpecies === s.id ? "selected" : ""}">
-    <span class="sp-dot" style="background:${spColor(s)}" title="${esc(ARCH[s.arch]?.th || "")}">${ARCH[s.arch]?.icon || ""}</span>
-    <div class="sp-name">${esc(s.name)}${s.sapient ? "<em>ผู้มีปัญญา</em>" : ""}</div>
-    <div class="sp-count">${fmt(s.count)}<small>ตัว</small></div>
-    <div class="sp-desc">${esc(s.desc)} · เกิดเมื่อ ${simClock(s.born)}</div>
-    <div class="sp-foot"><div class="sp-traits">${traitChips(s.avg)}</div>${sparkSVG(s.hist, spColor(s))}</div>
-    <div class="sp-foot"><span class="tiny muted">${s.parent && sim.species.get(s.parent) ? "แตกแขนงจาก " + esc(sim.species.get(s.parent).name) : "บรรพบุรุษแรกเริ่ม"}</span><div class="sp-actions"><button class="mini-btn" data-sp-follow="${s.id}">🎥 ติดตาม</button><button class="mini-btn ${seedSpecies === s.id ? "on" : ""}" data-sp-seed="${s.id}">🧬 เลือกปล่อย</button></div></div>
-  </article>`).join("") || `<p class="muted">ยังไม่มีสายพันธุ์ที่มีชีวิต</p>`);
+  $("speciesCount").textContent = `มีชีวิต ${alive.length} สายพันธุ์ · เคยเกิดขึ้น ${fmt(sim.totals.species)} · สูญพันธุ์ ${fmt(sim.totals.extinct)} — สายพันธุ์เกิดจากการกลายพันธุ์และการคัดเลือกโดยธรรมชาติ ไม่มีการกำหนดไว้ล่วงหน้า`;
+  setHTML($("speciesList"), `<thead><tr><th></th><th>สายพันธุ์</th><th>กลุ่ม</th><th class="num">จำนวน</th><th>แนวโน้ม</th><th>ลักษณะ</th><th></th></tr></thead><tbody>` +
+    (alive.slice(0, 50).map((s) => `<tr class="${seedSpecies === s.id ? "sel" : ""}">
+      <td class="sp-icon">${ARCH[s.arch]?.icon || ""}</td>
+      <td class="sp-name"><span class="swatch" style="background:${spColor(s)}"></span> ${esc(s.name)}${s.sapient ? ` <span class="has-special small">ผู้มีปัญญา</span>` : ""}<div class="muted small">${s.parent && sim.species.get(s.parent) ? "จาก " + esc(sim.species.get(s.parent).name) : "บรรพบุรุษแรกเริ่ม"} · ${simClock(s.born)}</div></td>
+      <td>${esc(ARCH[s.arch]?.th || "")}<div class="muted small">${ROLE_TH[s.role] || ""}</div></td>
+      <td class="num">${fmt(s.count)}</td>
+      <td>${sparkSVG(s.hist, spColor(s))}</td>
+      <td>${traitChips(s.avg)}</td>
+      <td style="white-space:nowrap">${action({ attrs: `data-sp-follow="${s.id}"`, name: "ติดตาม", can: true, small: true })} ${action({ attrs: `data-sp-seed="${s.id}"`, name: "เลือกปล่อย", can: true, small: true, on: seedSpecies === s.id })}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">ยังไม่มีสายพันธุ์ที่มีชีวิต</td></tr>`) + "</tbody>");
   if (performance.now() - (renderSpecies.lastTree || 0) > 4000) { renderSpecies.lastTree = performance.now(); $("treeBox").innerHTML = buildTree(); }
 }
 
@@ -352,19 +405,19 @@ function buildTree() {
   const kids = new Map(); const roots = [];
   for (const n of nodes) { if (n.parent && keep.has(n.parent)) { if (!kids.has(n.parent)) kids.set(n.parent, []); kids.get(n.parent).push(n); } else roots.push(n); }
   const order = [];
-  const walk = (n, depth) => { order.push(n); (kids.get(n.id) || []).sort((a, b) => a.born - b.born).forEach((k) => walk(k, depth + 1)); };
-  roots.sort((a, b) => a.born - b.born).forEach((r) => walk(r, 0));
-  const rows = order.slice(0, 220), rowH = 15, labelW = 210, W = 900, H = rows.length * rowH + 26;
+  const walk = (n) => { order.push(n); (kids.get(n.id) || []).sort((a, b) => a.born - b.born).forEach(walk); };
+  roots.sort((a, b) => a.born - b.born).forEach(walk);
+  const rows = order.slice(0, 220), rowH = 15, labelW = 230, W = 920, H = rows.length * rowH + 26;
   const t1 = sim.tick, X = (t) => labelW + (t / Math.max(1, t1)) * (W - labelW - 12);
   const idx = new Map(rows.map((n, i) => [n.id, i]));
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="ต้นไม้วิวัฒนาการ">`;
-  for (const e of game.state.eraLog) { const x = X(e.tick); svg += `<line x1="${x}" y1="0" x2="${x}" y2="${H - 18}" stroke="#263650" stroke-dasharray="3 3"/><text x="${x + 3}" y="${H - 5}" style="fill:#91a3bd;font-size:10px">${ERAS[e.era].icon} ${e.era + 1}</text>`; }
+  for (const e of game.state.eraLog) { const x = X(e.tick); svg += `<line x1="${x}" y1="0" x2="${x}" y2="${H - 18}" stroke="currentColor" stroke-opacity=".2" stroke-dasharray="3 3"/><text x="${x + 3}" y="${H - 5}" style="font-size:10px">${ERAS[e.era].icon} ${e.era + 1}</text>`; }
   rows.forEach((n, i) => {
     const y = i * rowH + 9, x0 = X(n.born), x1 = X(n.extinct ?? t1), alive = n.extinct === null;
-    const col = spColor(n, alive ? 62 : 40);
+    const col = spColor(n, alive ? 58 : 40);
     if (n.parent && idx.has(n.parent)) { const py = idx.get(n.parent) * rowH + 9; svg += `<path d="M${x0} ${py} V${y}" stroke="${col}" stroke-opacity=".5" fill="none"/>`; }
     svg += `<line x1="${x0}" y1="${y}" x2="${Math.max(x1, x0 + 2)}" y2="${y}" stroke="${col}" stroke-width="${alive ? 4 : 2}" stroke-linecap="round"/>`;
-    svg += `<text x="6" y="${y + 4}" style="${alive ? "" : "fill:#62728b"}">${n.sapient ? "🧠 " : ""}${esc(n.name)}${alive ? ` · ${n.count}` : " †"}</text>`;
+    svg += `<text x="6" y="${y + 4}" style="${alive ? "" : "opacity:.5"}">${ARCH[n.arch]?.icon || ""} ${esc(n.name)}${alive ? ` · ${n.count}` : " †"}</text>`;
   });
   return svg + "</svg>";
 }
@@ -374,42 +427,36 @@ function renderLab() {
   const guide = P.guide && sim.tick < P.guide.until ? P.guide : null;
   const mut = sim.tick < P.mutagenUntil;
   const gc = game.guideCost();
+  setHTML($("labGrid"), `
+    <section class="lab-section"><h2>อัตราการกลายพันธุ์</h2>
+      <p>ตอนนี้ลูกมีโอกาสกลายพันธุ์ ${(P.mutationRate * 100).toFixed(0)}% ต่อยีน · ความแรง ${(P.mutationStrength * 100).toFixed(1)}% ของช่วงยีน</p>
+      <div class="action-grid">${action({ attrs: 'data-lab="mutation"', name: "🧪 กลายพันธุ์", cost: s.mutation >= 10 ? "สูงสุด" : `${fmt(game.mutationCost())} DNA`, count: s.mutation, can: s.res.dna >= game.mutationCost(), done: s.mutation >= 10, tip: "mutation" })}
+      ${action({ attrs: 'data-lab="mutagen"', name: "☢️ รังสีเร่งกลายพันธุ์", cost: mut ? "กำลังทำงาน" : `${fmt(game.mutagenCost())} DNA`, can: s.res.dna >= game.mutagenCost(), on: mut, tip: "mutagen" })}</div></section>
+    <section class="lab-section"><h2>กำหนดแรงคัดเลือก</h2>
+      <p>ผลักลูกที่เกิดใหม่ทั้งโลกไปทางลักษณะที่เลือกเป็นเวลา 90 วินาทีจำลอง · ${fmt(gc)} DNA ต่อครั้ง</p>
+      ${guide ? `<div class="active-note">กำลังคัดเลือก: <b>${GENES[guide.gene].label} ${guide.dir > 0 ? "↑" : "↓"}</b> · เหลือ <span id="guideLeft"></span> วินาที</div>` : ""}
+      <div class="guide-table">${GUIDE_GENES.map((g) => `<span>${GENES[g.gene].label}</span>${action({ attrs: `data-guide="${g.gene}" data-dir="1"`, name: `↑ ${g.up}`, can: s.res.dna >= gc, small: true, on: guide?.gene === g.gene && guide.dir > 0, tip: `guide:${g.gene}:1` })}${action({ attrs: `data-guide="${g.gene}" data-dir="-1"`, name: `↓ ${g.down}`, can: s.res.dna >= gc, small: true, on: guide?.gene === g.gene && guide.dir < 0, tip: `guide:${g.gene}:-1` })}`).join("")}</div></section>
+    <section class="lab-section"><h2>ยีนเฉลี่ยของสิ่งมีชีวิตทั้งโลก</h2><p>ดูว่าโลกกำลังวิวัฒนาการไปทางไหน ขีดสีเหลืองคือขีดจำกัดของยุคปัจจุบัน</p><div id="genePool" style="max-width:34rem"></div></section>`);
+  if ($("guideLeft") && guide) $("guideLeft").textContent = Math.ceil((guide.until - sim.tick) / TPS);
   const avg = {}; for (const k of GENE_KEYS) avg[k] = 0;
   for (const c of sim.creatures) for (const k of GENE_KEYS) avg[k] += c.g[k];
   for (const k of GENE_KEYS) avg[k] /= Math.max(1, sim.creatures.length);
-  setHTML($("labGrid"), `
-    <div class="panel lab-card"><span class="eyebrow">MUTATION RATE</span><h3>🧪 อัตราการกลายพันธุ์ ระดับ ${s.mutation}</h3>
-      <p>ลูกมีโอกาสกลายพันธุ์ ${(P.mutationRate * 100).toFixed(0)}% ต่อยีน · ความแรง ${(P.mutationStrength * 100).toFixed(1)}% ของช่วงยีน · DNA +${s.mutation * 6}%<br>กลายพันธุ์มาก = ปรับตัวเร็วขึ้นและแตกสายพันธุ์บ่อยขึ้น แต่ลูกที่ด้อยกว่าก็มากขึ้น</p>
-      ${pips(s.mutation, 10)}<div class="card-bottom" style="margin-top:12px"><span class="cost">${s.mutation >= 10 ? "สูงสุด" : fmt(game.mutationCost()) + " DNA"}</span><button class="buy-button" data-lab="mutation" ${s.mutation < 10 && s.res.dna >= game.mutationCost() ? "" : "disabled"}>กลายพันธุ์ ↗</button></div></div>
-    <div class="panel lab-card"><span class="eyebrow">DIRECTIONAL SELECTION</span><h3>🎯 กำหนดแรงคัดเลือก</h3>
-      <p>ผลักลูกที่เกิดใหม่ทั้งโลกไปทางลักษณะที่เลือกเป็นเวลา 90 วินาทีจำลอง · ${fmt(gc)} DNA ต่อครั้ง</p>
-      ${guide ? `<div class="active-guide">กำลังคัดเลือก: <b>${GENES[guide.gene].label} ${guide.dir > 0 ? "↑" : "↓"}</b> · เหลือ <span id="guideLeft"></span> วินาที</div>` : ""}
-      <div class="guide-grid">${GUIDE_GENES.map((g) => `<span>${GENES[g.gene].label}</span><button class="mini-btn" data-guide="${g.gene}" data-dir="1" title="${g.up}" ${s.res.dna >= gc ? "" : "disabled"}>↑ ${g.up}</button><button class="mini-btn" data-guide="${g.gene}" data-dir="-1" title="${g.down}" ${s.res.dna >= gc ? "" : "disabled"}>↓</button>`).join("")}</div></div>
-    <div class="panel lab-card"><span class="eyebrow">MUTAGEN</span><h3>☢️ รังสีเร่งการกลายพันธุ์</h3>
-      <p>45 วินาทีจำลองที่อัตรากลายพันธุ์สูงขึ้น 3 เท่า เหมาะเมื่อโลกเปลี่ยนแปลงเร็ว เช่น ยุคน้ำแข็ง</p>
-      ${mut ? `<div class="active-guide">กำลังทำงาน · เหลือ <span id="mutagenLeft"></span> วินาที</div>` : ""}
-      <div class="card-bottom"><span class="cost">${fmt(game.mutagenCost())} DNA</span><button class="buy-button" data-lab="mutagen" ${s.res.dna >= game.mutagenCost() ? "" : "disabled"}>ปล่อยรังสี</button></div></div>
-    <div class="panel lab-card"><span class="eyebrow">GENE POOL</span><h3>🧬 ยีนเฉลี่ยของสิ่งมีชีวิตทั้งโลก</h3>
-      <p>ดูว่าโลกกำลังวิวัฒนาการไปทางไหน แถบสีทองคือขีดจำกัดของยุคปัจจุบัน</p>
-      <div id="genePool"></div></div>`);
-  // fast-changing numbers live in their own nodes so the buttons above stay put
-  if ($("guideLeft") && guide) $("guideLeft").textContent = Math.ceil((guide.until - sim.tick) / TPS);
-  if ($("mutagenLeft") && mut) $("mutagenLeft").textContent = Math.ceil((P.mutagenUntil - sim.tick) / TPS);
   const pool = $("genePool");
-  if (pool) { pool._html = pool.innerHTML === "" ? "" : pool._html; setHTML(pool, GENE_KEYS.map((k) => { const G = GENES[k], cap = capsFor(sim.era)[k]; const pct = (avg[k] - G.min) / (G.max - G.min) * 100; return `<div class="gene-row"><span>${G.label}</span><div class="gene-bar"><div style="width:${pct}%"></div>${cap !== undefined && cap < G.max ? `<i style="left:${(cap - G.min) / (G.max - G.min) * 100}%"></i>` : ""}</div><span>${k === "sense" ? Math.round(avg[k]) : avg[k].toFixed(2)}</span></div>`; }).join("")); }
+  if (pool) { if (!pool.innerHTML) pool._html = ""; setHTML(pool, GENE_KEYS.map((k) => { const G = GENES[k], cap = capsFor(sim.era)[k]; const pct = (avg[k] - G.min) / (G.max - G.min) * 100; return `<div class="gene-row"><span>${G.label}</span><div class="gene-bar"><div style="width:${pct}%"></div>${cap !== undefined && cap < G.max ? `<i style="left:${(cap - G.min) / (G.max - G.min) * 100}%"></i>` : ""}</div><span>${k === "sense" ? Math.round(avg[k]) : avg[k].toFixed(2)}</span></div>`; }).join("")); }
 }
 
 function renderTech() {
   setHTML($("technologyGrid"), TECHS.map((t) => {
-    const owned = !!game.state.techs[t.id], locked = sim.era < t.era, can = !owned && !locked && game.state.res.knowledge >= t.cost;
-    return `<article class="card ${owned ? "owned" : ""} ${locked ? "locked" : ""}"><div class="card-top"><div class="item-icon">${t.icon}</div><div><h3>${t.name}</h3><span>${owned ? "✓ วิจัยแล้ว" : locked ? `🔒 ERA ${t.era + 1}` : t.desc}</span></div></div><p>${t.bonus}</p><div class="card-bottom"><span class="cost">${owned ? "" : fmt(t.cost) + " ความรู้"}</span><button class="buy-button" data-tech="${t.id}" ${can ? "" : "disabled"}>${owned ? "สำเร็จ" : "วิจัย"}</button></div></article>`;
+    const owned = !!game.state.techs[t.id], locked = sim.era < t.era;
+    return action({ attrs: `data-tech="${t.id}"`, name: `${t.icon} ${t.name}`, cost: owned ? "วิจัยแล้ว" : locked ? `🔒 ERA ${t.era + 1}` : `${fmt(t.cost)} ความรู้`, can: game.state.res.knowledge >= t.cost, locked: locked && !owned, done: owned, tip: `tech:${t.id}` });
   }).join(""));
 }
 
 function renderWorld() {
   const st = sim.stats, w = sim.world;
   let farm = 0, iceCells = 0, greenLand = 0;
-  for (let i = 0; i < w.farm.length; i++) { farm += w.farm[i]; if (w.temp[i] < 0.1) iceCells++; if (!w.isWater(i)) greenLand += w.green[i]; }
+  const biomeCount = new Array(BIOMES.length).fill(0);
+  for (let i = 0; i < w.farm.length; i++) { farm += w.farm[i]; if (w.temp[i] < 0.1) iceCells++; if (!w.isWater(i)) greenLand += w.green[i]; biomeCount[w.biome[i]]++; }
   const div = Math.min(100, st.biodiversity / Math.log(30) * 100);
   const meters = [
     ["🌿 ความหลากหลายทางชีวภาพ", div, `${div.toFixed(0)}% · ${st.alive} สายพันธุ์`],
@@ -418,40 +465,62 @@ function renderWorld() {
     ["🌾 ไร่นา", farm / w.landCells * 100, `${farm} ไร่`],
     ["🏭 มลพิษ", sim.climate.pollution / 0.32 * 100, `+${(sim.climate.pollution * 40).toFixed(1)}°C`],
   ];
-  const events = sim.activeEvents.map((e) => ({ ice: "❄️ ยุคน้ำแข็ง", warm: "🔥 โลกร้อน", dust: "🌫️ ฝุ่นอุกกาบาต" }[e.kind] + ` · เหลือ ${Math.ceil((e.until - sim.tick) / TPS)} วิ`));
-  setHTML($("ecologyMeters"), `<div class="meter-row"><div><span>🌡️ อุณหภูมิเฉลี่ย</span><strong>${tempC(sim.climate.offset)}</strong></div><div class="meter-track"><div style="width:${Math.max(2, Math.min(100, 50 + sim.climate.offset * 120))}%"></div></div></div>` +
-    meters.map(([n, v, t]) => `<div class="meter-row"><div><span>${n}</span><strong>${t}</strong></div><div class="meter-track"><div style="width:${Math.max(1, Math.min(100, v))}%"></div></div></div>`).join("") +
-    (events.length ? `<p class="tiny">${events.join("<br>")}</p>` : `<p class="tiny muted">ไม่มีเหตุการณ์ภูมิอากาศพิเศษตอนนี้</p>`));
-  setHTML($("climateRow"), `<button class="secondary-button" data-climate="-1">❄️ ทำให้เย็นลง · ${fmt(game.climateCost())} ⚡</button><button class="secondary-button" data-climate="1">🔥 ทำให้อุ่นขึ้น · ${fmt(game.climateCost())} ⚡</button>`);
+  const events = sim.activeEvents.map((e) => ({ ice: "❄️ ยุคน้ำแข็ง", warm: "🔥 โลกร้อน", dust: "🌫️ ฝุ่นอุกกาบาต" }[e.kind] + ` · เหลือ ${Math.ceil((e.until - sim.tick) / TPS)} วินาที`));
+  setHTML($("ecologyMeters"), `<div class="meter-row"><div><span>🌡️ อุณหภูมิเฉลี่ย</span><span class="${sim.climate.offset < -0.08 ? "has-info" : sim.climate.offset > 0.08 ? "has-danger" : ""}">${tempC(sim.climate.offset)}</span></div></div>` +
+    meters.map(([n, v, t]) => `<div class="meter-row"><div><span>${n}</span><span>${t}</span></div><div class="meter-track"><div style="width:${Math.max(1, Math.min(100, v))}%"></div></div></div>`).join("") +
+    `<p class="small ${events.length ? "has-caution" : "muted"}">${events.length ? events.join("<br>") : "ไม่มีเหตุการณ์ภูมิอากาศพิเศษตอนนี้"}</p>` +
+    `<h2 class="sub-head">ไบโอม</h2>` + biomeCount.map((n, b) => n ? `<div class="meter-row"><div><span>${BIOMES[b].icon} ${BIOMES[b].name}</span><span class="muted">${(n / w.bio.length * 100).toFixed(0)}%</span></div></div>` : "").join(""));
+  setHTML($("climateRow"), action({ attrs: 'data-climate="-1"', name: "❄️ ทำให้เย็นลง", cost: `${fmt(game.climateCost())} พลังงาน`, can: game.state.res.energy >= game.climateCost(), tip: "climate:-1" }) + action({ attrs: 'data-climate="1"', name: "🔥 ทำให้อุ่นขึ้น", cost: `${fmt(game.climateCost())} พลังงาน`, can: game.state.res.energy >= game.climateCost(), tip: "climate:1" }));
   const fw = [["🌿 ชีวมวลพืช", st.plants, "#3fae6a"], ["กินพืช", st.roles[0], ROLE_COLORS[0]], ["กินทั้งพืชและสัตว์", st.roles[1], ROLE_COLORS[1]], ["ผู้ล่า", st.roles[2], ROLE_COLORS[2]]];
-  if (sim.era >= 4) fw.push(["🏘️ อารยธรรม", st.civPop, "#81b8ff"]);
+  if (sim.era >= 4) fw.push(["🏘️ อารยธรรม", st.civPop, "#3d9df5"]);
   const max = Math.max(...fw.map((f) => f[1]), 1);
-  setHTML($("foodWeb"), fw.map(([n, v, c]) => `<div class="fw-row"><span>${n}</span><div class="fw-bar" style="width:${Math.max(1, v / max * 100)}%;background:${c}"></div><b>${fmt(v)}</b></div>`).join(""));
+  setHTML($("foodWeb"), fw.map(([n, v, c]) => `<div class="fw-row"><span>${n}</span><div class="fw-bar" style="width:${Math.max(1, v / max * 100)}%;background:${c}"></div><b>${fmt(v)}</b></div>`).join("") +
+    `<h2 class="sub-head">กลุ่มสิ่งมีชีวิตตอนนี้</h2>` + Object.entries(st.arch || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="fw-row"><span>${ARCH[k]?.icon || ""} ${ARCH[k]?.th || k}</span><div class="fw-bar" style="width:${Math.max(1, v / Math.max(1, st.n) * 100)}%;background:var(--link)"></div><b>${fmt(v)}</b></div>`).join(""));
+}
+
+function renderStatsLive() {
+  const st = sim.stats, T = sim.totals;
+  const stats = [
+    ["สิ่งมีชีวิต", fmt(st.n)], ["สายพันธุ์", fmt(st.alive)], ["อุณหภูมิ", tempC(sim.climate.offset)], ["เกิด / นาที", fmt(sim.ratePerMinute("births"))], ["ตาย / นาที", fmt(sim.ratePerMinute("deaths"))],
+    ["ถูกล่า (รวม)", fmt(T.eaten)], ["อดตาย (รวม)", fmt(T.starved)], ["ตายตามอายุ (รวม)", fmt(T.aged)], ["ถิ่นฐาน", fmt(sim.settlements.length)], ["เวลาจำลอง", simClock(sim.tick)],
+  ];
+  setHTML($("statGrid"), stats.map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${v}</strong></div>`).join(""));
+  const hi = drawPopulationChart($("popChart"), sim.history, chartHover);
+  const tip = $("chartTip");
+  if (hi >= 0) {
+    const s = sim.history[hi], ago = (sim.tick - s.t) / TPS;
+    tip.hidden = false;
+    tip.innerHTML = `<div class="muted">${ago < 2 ? "ตอนนี้" : simClock(ago * TPS) + " ที่แล้ว"}</div>` + ROLE_NAMES.map((n, i) => `<div><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${ROLE_COLORS[i]}"></i> ${n} <b>${s.roles[i]}</b></div>`).join("") + `<div>รวม <b>${s.n}</b></div>`;
+    tip.style.left = Math.min(chartHover + 10, $("popChart").clientWidth - 150) + "px";
+  } else tip.hidden = true;
+  $("popLegend").innerHTML = ROLE_NAMES.map((n, i) => `<span><i style="background:${ROLE_COLORS[i]}"></i>${n} <b>${st.roles[i]}</b></span>`).join("");
   drawLineChart($("plantChart"), sim.history.map((h) => h.plants), "#3fae6a");
-  setHTML($("eventLog"), game.state.log.slice(0, 60).map((l) => `<div class="event-item"><time>${simClock(l.t)}</time><p style="margin:0">${esc(l.text)}</p></div>`).join(""));
 }
 
 function renderArchive() {
   const s = game.state, T = sim.totals;
   const reached = new Map(s.eraLog.map((e) => [e.era, e]));
   const rec = [["เกิดทั้งหมด", T.births], ["ตายทั้งหมด", T.deaths], ["ถูกล่า", T.eaten], ["อดตาย", T.starved], ["สายพันธุ์ที่เคยมี", T.species], ["สูญพันธุ์", T.extinct], ["ประชากรสูงสุด", s.records.maxPop], ["สายพันธุ์พร้อมกันสูงสุด", s.records.maxSpecies], ["จรวดที่ปล่อย", sim.launches], ["อาณานิคม", sim.colonies]];
-  const extinct = [...sim.species.values()].filter((x) => x.extinct !== null && x.peak >= 20).sort((a, b) => b.peak - a.peak).slice(0, 12);
+  const extinct = [...sim.species.values()].filter((x) => x.extinct !== null && x.peak >= 20).sort((a, b) => b.peak - a.peak).slice(0, 15);
   setHTML($("archiveContent"),
-    `<article class="archive-card wide"><div class="record-grid">${rec.map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${fmt(v)}</strong></div>`).join("")}</div></article>` +
-    `<h3 class="archive-title">สารานุกรมสิ่งมีชีวิต · ค้นพบ ${Object.keys(sim.discovered || {}).length} / ${ARCH_KEYS.length} กลุ่ม</h3>` +
-    `<article class="archive-card wide"><div class="ency-grid">${ARCH_KEYS.map((k) => { const found = sim.discovered?.[k] !== undefined, alive = sim.stats.arch?.[k] || 0; return `<div class="ency ${found ? "" : "locked"}" title="${found ? esc(ARCH[k].group) : "ยังไม่ค้นพบ"}"><span>${found ? ARCH[k].icon : "❔"}</span><b>${found ? ARCH[k].th : "???"}</b><small>${found ? (alive ? fmt(alive) + " ตัวตอนนี้" : "สูญพันธุ์แล้ว") : "ERA " + (ARCH[k].era + 1) + "+"}</small></div>`; }).join("")}</div></article>` +
-    `<h3 class="archive-title">ยุคสมัย</h3>` +
-    ERAS.map((e, i) => { const r = reached.get(i); return `<article class="archive-card ${r ? "" : "locked"}"><div class="archive-symbol">${r ? e.icon : "🔒"}</div><div><small>ERA ${String(i + 1).padStart(2, "0")}${r ? ` · ${simClock(r.tick)}` : ""}</small><h3>${r ? e.name : "ยุคที่ยังไม่ค้นพบ"}</h3><p>${r ? e.description : "วิวัฒนาการต่อไปเพื่อเปิดเผยประวัติศาสตร์"}</p></div></article>`; }).join("") +
-    `<h3 class="archive-title">สายพันธุ์ที่สูญพันธุ์ไปแล้ว</h3>` +
-    (extinct.length ? extinct.map((x) => `<article class="archive-card"><span class="sp-dot" style="background:${spColor(x, 40)};width:30px;height:30px">${ARCH[x.arch]?.icon || ""}</span><div><small>${simClock(x.born)} – ${simClock(x.extinct)}</small><h3>${esc(x.name)}</h3><p>${esc(x.desc)} · ประชากรสูงสุด ${x.peak}</p></div></article>`).join("") : `<p class="muted">ยังไม่มีสายพันธุ์ใหญ่ที่สูญพันธุ์</p>`));
+    `<div class="stat-grid">${rec.map(([k, v]) => `<div class="stat"><small>${k}</small><strong>${fmt(v)}</strong></div>`).join("")}</div>` +
+    `<h2 class="sub-head">สารานุกรมสิ่งมีชีวิต <span class="muted small">ค้นพบ ${Object.keys(sim.discovered || {}).length} / ${ARCH_KEYS.length} กลุ่ม</span></h2>` +
+    `<div class="ency-grid">${ARCH_KEYS.map((k) => { const found = sim.discovered?.[k] !== undefined, alive = sim.stats.arch?.[k] || 0; return `<div class="ency ${found ? "" : "locked"}" title="${found ? esc(ARCH[k].group) : "ยังไม่ค้นพบ"}"><span>${found ? ARCH[k].icon : "?"}</span>${found ? ARCH[k].th : "???"}<small class="${found && alive ? "has-success" : ""}">${found ? (alive ? fmt(alive) + " ตัว" : "สูญพันธุ์แล้ว") : "ERA " + (ARCH[k].era + 1) + "+"}</small></div>`; }).join("")}</div>` +
+    `<h2 class="sub-head">ยุคสมัย</h2><ul class="era-list">` +
+    ERAS.map((e, i) => { const r = reached.get(i); return `<li class="${r ? "" : "locked"}"><span>${r ? e.icon : "🔒"}</span><span class="muted">ERA ${String(i + 1).padStart(2, "0")}${r ? ` · ${simClock(r.tick)}` : ""}</span><span>${r ? `<b>${e.name}</b> — ${e.description}` : "ยุคที่ยังไม่ค้นพบ"}</span></li>`; }).join("") + `</ul>` +
+    `<h2 class="sub-head">สายพันธุ์ที่สูญพันธุ์ไปแล้ว</h2>` +
+    (extinct.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th></th><th>สายพันธุ์</th><th>ช่วงเวลา</th><th class="num">สูงสุด</th></tr></thead><tbody>${extinct.map((x) => `<tr><td>${ARCH[x.arch]?.icon || ""}</td><td><span class="swatch" style="background:${spColor(x, 40)}"></span> ${esc(x.name)}<div class="muted small">${esc(x.desc)}</div></td><td class="muted">${simClock(x.born)} – ${simClock(x.extinct)}</td><td class="num">${x.peak}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">ยังไม่มีสายพันธุ์ใหญ่ที่สูญพันธุ์</p>`));
 }
 
 function renderCycle() {
   const can = game.canPrestige(), s = game.state;
-  setHTML($("cycleContent"), `<div class="panel cycle-panel"><div><h3>🌌 การเกิดใหม่ของจักรวาล${s.cycles ? ` · วัฏจักรที่ ${s.cycles + 1}` : ""}</h3>
-    <p>เศษซากจักรวาลที่มี: <b>${s.prestige}</b> · โบนัสถาวร: ทรัพยากรทั้งหมด +${s.prestige * 8}% · พืชโตเร็วขึ้น +${s.prestige * 4}%</p>
-    <p class="tiny" style="margin-top:8px">${can ? `เริ่มใหม่ตอนนี้จะได้รับ <b>${game.prestigeGain()}</b> เศษซาก (จาก DNA สะสม ${fmt(s.totalDNA)} และอาณานิคม ${sim.colonies})` : `ปลดล็อกเมื่อถึง ERA 10 · ${ERAS[9].name} (ตอนนี้ ERA ${sim.era + 1})`}</p></div>
-    <button class="primary-button" style="width:auto" id="prestigeButton" ${can ? "" : "disabled"}>🌌 เริ่มวัฏจักรใหม่</button></div>`);
+  setHTML($("cycleContent"), `<p class="view-intro">เมื่ออารยธรรมไปถึงอวกาศ คุณสามารถสร้างดาวดวงใหม่ โดยนำเศษซากจักรวาลติดตัวไปเป็นโบนัสถาวร</p>
+    <div class="res-row" style="max-width:24rem"><span class="rname">🌌 เศษซากจักรวาล</span><span class="rval">${s.prestige}</span><span></span></div>
+    <div class="res-row" style="max-width:24rem"><span class="rname">โบนัสทรัพยากร</span><span class="rval">+${s.prestige * 8}%</span><span></span></div>
+    <div class="res-row" style="max-width:24rem"><span class="rname">พืชโตเร็วขึ้น</span><span class="rval">+${s.prestige * 4}%</span><span></span></div>
+    <div class="res-row" style="max-width:24rem"><span class="rname">วัฏจักรที่</span><span class="rval">${s.cycles + 1}</span><span></span></div>
+    <p class="small ${can ? "has-success" : "muted"}">${can ? `เริ่มใหม่ตอนนี้จะได้รับ ${game.prestigeGain()} เศษซาก (DNA สะสม ${fmt(s.totalDNA)} · อาณานิคม ${sim.colonies})` : `ปลดล็อกเมื่อถึง ERA 10 · ${ERAS[9].name} (ตอนนี้ ERA ${sim.era + 1})`}</p>
+    <div class="action-grid">${action({ attrs: 'id="prestigeButton"', name: "🌌 เริ่มวัฏจักรใหม่", can, locked: !can, tip: "prestige" })}</div>`);
 }
 
 // ------------------------------------------------------------ input
@@ -527,7 +596,7 @@ $("inspector").addEventListener("click", (e) => {
   if (a === "close") closeInspector();
   else if (a === "follow" && c) { renderer.follow = !renderer.follow; if (renderer.follow) renderer.focus(c.x, c.y, Math.max(renderer.cam.zoom, 2.6)); }
   else if (a === "seed" && c) { seedSpecies = c.sp; toast(`เลือก ${sim.species.get(c.sp).name} สำหรับเครื่องมือปล่อยสายพันธุ์`); }
-  else if (a === "species") switchTab("life", true);
+  else if (a === "species") switchTab("life");
   else if (a === "another" && c) followSpecies(c.sp);
   $("inspector")._html = ""; renderInspector(); renderTools();
 });
@@ -546,7 +615,7 @@ $("minimap").addEventListener("click", (e) => { const r = e.target.getBoundingCl
 $("popChart").addEventListener("pointermove", (e) => { chartHover = e.offsetX; });
 $("popChart").addEventListener("pointerleave", () => { chartHover = null; });
 
-$("evolveButton").addEventListener("click", () => { if (game.evolve()) { absorbEvents(); toast(`วิวัฒนาการสำเร็จ: ${ERAS[sim.era].name}`); ticker(`${ERAS[sim.era].icon} เข้าสู่ ${ERAS[sim.era].name}`, "era"); game.save(); refreshNow(); } });
+$("evolveButton").addEventListener("click", () => { if (game.evolve()) { absorbEvents(); renderLog(); toast(`วิวัฒนาการสำเร็จ: ${ERAS[sim.era].name}`); game.save(); refreshNow(); } });
 $("upgradeGrid").addEventListener("click", (e) => { const b = e.target.closest("[data-upgrade]"); if (b) result(game.buyUpgrade(b.dataset.upgrade)); });
 $("technologyGrid").addEventListener("click", (e) => { const b = e.target.closest("[data-tech]"); if (b) result(game.buyTech(b.dataset.tech), "ค้นพบเทคโนโลยีใหม่"); });
 $("labGrid").addEventListener("click", (e) => {
@@ -557,8 +626,8 @@ $("labGrid").addEventListener("click", (e) => {
 });
 $("speciesList").addEventListener("click", (e) => {
   const f = e.target.closest("[data-sp-follow]"), s = e.target.closest("[data-sp-seed]");
-  if (f) { followSpecies(+f.dataset.spFollow); $("worldWrap").scrollIntoView({ behavior: "smooth", block: "center" }); }
-  if (s) { seedSpecies = +s.dataset.spSeed; tool = "seed"; toast(`เลือก ${sim.species.get(seedSpecies).name} — คลิกบนแผนที่เพื่อปล่อย`); renderSpecies(); renderTools(); }
+  if (f) { switchTab("map"); followSpecies(+f.dataset.spFollow); }
+  if (s) { seedSpecies = +s.dataset.spSeed; tool = "seed"; toast(`เลือก ${sim.species.get(seedSpecies).name} — ไปที่แท็บโลกแล้วคลิกบนแผนที่เพื่อปล่อย`); renderSpecies(); renderTools(); }
 });
 $("climateRow").addEventListener("click", (e) => { const b = e.target.closest("[data-climate]"); if (b) result(game.climate(+b.dataset.climate)); });
 $("cycleContent").addEventListener("click", (e) => {
@@ -566,13 +635,20 @@ $("cycleContent").addEventListener("click", (e) => {
   ask("เริ่มวัฏจักรใหม่?", `รับเศษซากจักรวาล ${game.prestigeGain()} ชิ้น โลกปัจจุบันจะถูกแทนที่ด้วยดาวดวงใหม่`, "เริ่มจักรวาลใหม่").then((ok) => { if (ok) { setGame(game.prestige()); toast("จักรวาลใหม่ถือกำเนิดแล้ว"); } });
 });
 
-function switchTab(tab, scroll = false) {
+function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${tab}`));
-  updateHeavy();
-  if (scroll) document.querySelector(".tabbar").scrollIntoView({ behavior: "smooth" });
+  $("tooltip").hidden = true; tipEl = null;
+  if (tab === "map") { map2d.resize(); if (map3d) map3d.resize(); }
+  refreshNow();
 }
+$("msgFilters").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-filter]"); if (!b) return;
+  logFilter = b.dataset.filter;
+  $("msgFilters").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+  renderLog();
+});
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
 document.addEventListener("keydown", (e) => {
@@ -586,14 +662,14 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ------------------------------------------------------------ save / settings
-function persist() { if (catchingUp) return; const ok = game.save(); $("saveState").textContent = ok ? "● บันทึกแล้ว" : "● บันทึกไม่ได้"; setTimeout(() => ($("saveState").textContent = "● บันทึกอัตโนมัติ"), 1600); }
+function persist() { if (catchingUp) return; const ok = game.save(); $("saveState").textContent = ok ? "บันทึกแล้ว" : "บันทึกไม่ได้"; setTimeout(() => ($("saveState").textContent = "บันทึกอัตโนมัติ"), 1600); }
 setInterval(persist, 20000);
 window.addEventListener("beforeunload", () => game.save());
 document.addEventListener("visibilitychange", () => { if (document.hidden) game.save(); });
 
 function setGame(g) {
   game = g; sim = g.sim; map2d.setSim(sim); if (map3d) map3d.setSim(sim); closeInspector(); seedSpecies = null; acc = 0;
-  incomeLog.length = 0; game.save(); focusLife(); refreshNow();
+  incomeLog.length = 0; game.save(); focusLife(); refreshNow(); renderLog();
 }
 $("exportSave").addEventListener("click", () => {
   const blob = new Blob([game.exportJSON()], { type: "application/json" }), url = URL.createObjectURL(blob), a = document.createElement("a");
@@ -608,13 +684,15 @@ $("importFile").addEventListener("change", async (e) => {
 $("resetGame").addEventListener("click", () => ask("เริ่มเกมใหม่?", "โลกและความคืบหน้าปัจจุบันจะถูกลบ เศษซากจักรวาลยังอยู่", "เริ่มใหม่").then((ok) => { if (ok) setGame(Game.newGame(game.state.prestige, game.state.cycles)); }));
 $("settingsButton").addEventListener("click", () => $("settingsDialog").showModal());
 $("helpButton").addEventListener("click", () => $("helpDialog").showModal());
+$("themeSelect").value = settings.theme;
+$("themeSelect").addEventListener("change", (e) => { settings.theme = e.target.value; applyTheme(); saveSettings(); refreshNow(); });
 $("weatherToggle").checked = settings.weather;
 $("weatherToggle").addEventListener("change", (e) => { settings.weather = e.target.checked; map2d.weather = settings.weather; if (map3d) map3d.weather = settings.weather; saveSettings(); });
 $("compactNumbers").checked = settings.compact; $("effectsToggle").checked = settings.effects; $("bgToggle").checked = settings.bg;
 $("compactNumbers").addEventListener("change", (e) => { settings.compact = e.target.checked; saveSettings(); refreshNow(); });
 $("effectsToggle").addEventListener("change", (e) => { settings.effects = e.target.checked; map2d.effects = settings.effects; if (map3d) map3d.effects = settings.effects; document.body.classList.toggle("no-effects", !settings.effects); saveSettings(); });
 $("bgToggle").addEventListener("change", (e) => { settings.bg = e.target.checked; saveSettings(); });
-$("footerVersion").textContent = `ORIGIN v${VERSION} · Real-time evolution simulator`;
+$("footerVersion").textContent = `ORIGIN v${VERSION} · Real-time evolution simulator · หน้าตาได้แรงบันดาลใจจาก Evolve`;
 window.addEventListener("resize", () => renderer.resize());
 new ResizeObserver(() => { map2d.resize(); if (map3d) map3d.resize(); }).observe($("worldWrap"));
 
@@ -631,7 +709,7 @@ map2d.resize();
 setView(settings.view3d && has3D);
 if (!has3D) $("viewToggle").hidden = true;
 focusLife();
-refreshNow();
+refreshNow(); renderLog();
 if (!settings.seenHelp) { $("helpDialog").showModal(); settings.seenHelp = true; saveSettings(); }
 if (restored && savedAt) catchUp((Date.now() - savedAt) / 1000);
 requestAnimationFrame(frame);

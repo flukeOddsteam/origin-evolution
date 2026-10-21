@@ -12,6 +12,8 @@ function setup(canvas) {
   return { ctx, w, h };
 }
 
+const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+
 function niceMax(v) {
   if (v <= 0) return 10;
   const p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p;
@@ -23,11 +25,12 @@ export function drawPopulationChart(canvas, history, hoverX = null) {
   const { ctx, w, h } = setup(canvas);
   const pad = { l: 34, r: 8, t: 8, b: 16 };
   const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
-  if (history.length < 2) { ctx.fillStyle = "#91a3bd"; ctx.font = "12px 'IBM Plex Sans Thai'"; ctx.fillText("กำลังเก็บข้อมูล…", pad.l, h / 2); return -1; }
+  const muted = cssVar("--muted", "#91a3bd"), soft = cssVar("--soft", "#3d4646"), bg = cssVar("--bg", "#1f2424"), text = cssVar("--text", "#fff");
+  if (history.length < 2) { ctx.fillStyle = muted; ctx.font = "12px Lato, 'IBM Plex Sans Thai'"; ctx.fillText("กำลังเก็บข้อมูล…", pad.l, h / 2); return -1; }
   const max = niceMax(Math.max(...history.map((s) => s.n)) * 1.05);
   const X = (i) => pad.l + (i / (history.length - 1)) * pw, Y = (v) => pad.t + ph - (v / max) * ph;
   // grid
-  ctx.strokeStyle = "rgba(145,163,189,.14)"; ctx.lineWidth = 1; ctx.fillStyle = "#91a3bd"; ctx.font = "10px 'Space Grotesk', sans-serif"; ctx.textAlign = "right";
+  ctx.strokeStyle = soft; ctx.lineWidth = 1; ctx.fillStyle = muted; ctx.font = "10px Lato, sans-serif"; ctx.textAlign = "right";
   for (let k = 0; k <= 2; k++) { const v = (max * k) / 2, y = Y(v); ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke(); ctx.fillText(v >= 1000 ? (v / 1000).toFixed(1) + "K" : v, pad.l - 5, y + 3); }
   // stacked areas with a thin surface gap between bands
   const base = new Array(history.length).fill(0);
@@ -38,15 +41,15 @@ export function drawPopulationChart(canvas, history, hoverX = null) {
     for (let i = history.length - 1; i >= 0; i--) ctx.lineTo(X(i), Y(base[i]));
     ctx.closePath(); ctx.fillStyle = ROLE_COLORS[r] + "cc"; ctx.fill();
     ctx.beginPath(); history.forEach((s, i) => (i ? ctx.lineTo(X(i), Y(top[i])) : ctx.moveTo(X(i), Y(top[i]))));
-    ctx.strokeStyle = "#0d1626"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = bg; ctx.lineWidth = 1.5; ctx.stroke();
     for (let i = 0; i < base.length; i++) base[i] = top[i];
   }
-  ctx.textAlign = "left"; ctx.fillStyle = "#91a3bd";
+  ctx.textAlign = "left"; ctx.fillStyle = muted;
   const span = (history[history.length - 1].t - history[0].t) / 30 / 60;
   ctx.fillText(`${span.toFixed(span < 10 ? 1 : 0)} นาทีที่แล้ว`, pad.l, h - 3); ctx.textAlign = "right"; ctx.fillText("ตอนนี้", w - pad.r, h - 3);
   if (hoverX === null || hoverX < pad.l || hoverX > w - pad.r) return -1;
   const i = Math.round(((hoverX - pad.l) / pw) * (history.length - 1));
-  ctx.strokeStyle = "rgba(234,241,255,.55)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(i), pad.t); ctx.lineTo(X(i), pad.t + ph); ctx.stroke();
+  ctx.strokeStyle = text; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X(i), pad.t); ctx.lineTo(X(i), pad.t + ph); ctx.stroke(); ctx.globalAlpha = 1;
   return i;
 }
 
