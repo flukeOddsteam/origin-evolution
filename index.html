@@ -3,77 +3,144 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a1020">
-  <title>ORIGIN — Evolution Idle</title>
+  <meta name="theme-color" content="#080e1b">
+  <title>ORIGIN — Evolution Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="src/styles.css">
 </head>
 <body>
-  <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
   <main class="app-shell">
     <header class="topbar">
-      <a class="brand" href="#" aria-label="ORIGIN home"><span class="brand-mark">✦</span><span><strong>ORIGIN</strong><small>EVOLUTION SIMULATOR</small></span></a>
-      <div class="top-actions"><span class="save-state" id="saveState">● บันทึกอัตโนมัติ</span><button class="icon-button" id="soundToggle" title="เปิด/ปิดเสียง">♫</button><button class="icon-button" id="settingsButton" title="ตั้งค่า">⚙</button></div>
+      <a class="brand" href="#" aria-label="ORIGIN"><span class="brand-mark">✦</span><span><strong>ORIGIN</strong><small>EVOLUTION SIMULATOR</small></span></a>
+      <div class="top-actions">
+        <span class="save-state" id="saveState">● บันทึกอัตโนมัติ</span>
+        <button class="icon-button" id="helpButton" title="วิธีเล่น">?</button>
+        <button class="icon-button" id="settingsButton" title="ตั้งค่า">⚙</button>
+      </div>
     </header>
 
-    <section class="hero panel">
-      <div class="hero-copy">
-        <div class="eyebrow"><span class="pulse"></span><span id="eraNumber">ERA 01</span><span class="eyebrow-divider">/</span><span id="eraType">ORIGIN OF LIFE</span></div>
-        <h1 id="eraTitle">มหาสมุทรแห่งจุดกำเนิด</h1>
-        <p id="eraDescription">ก่อนจะมีโลกที่เรารู้จัก มีเพียงสารเคมี พลังงาน และโอกาสเล็ก ๆ ที่ชีวิตจะถือกำเนิดขึ้น</p>
-        <div class="evolution-progress">
-          <div class="progress-label"><span>ความก้าวหน้าสู่ยุคถัดไป</span><strong id="eraProgressLabel">0 / 100 DNA</strong></div>
-          <div class="progress-track"><div id="eraProgress" class="progress-fill"></div></div>
+    <section class="stage">
+      <div class="world-wrap panel" id="worldWrap">
+        <canvas id="world" aria-label="โลกจำลองแบบเรียลไทม์"></canvas>
+        <div class="hud hud-tl">
+          <div class="hud-era"><span id="hudEraIcon">🌊</span><div><small id="hudEraNum">ERA 01</small><strong id="hudEraName">มหาสมุทรแห่งจุดกำเนิด</strong></div></div>
+          <div class="hud-clock"><span class="live-dot" id="liveDot"></span><span id="hudClock">00:00</span><span class="sep">·</span><span id="hudGen">รุ่นที่ 0</span></div>
         </div>
-        <button id="evolveButton" class="primary-button">🧬 วิวัฒนาการขั้นต่อไป <span>→</span></button>
-        <div id="evolveHint" class="muted tiny">สะสม DNA ให้เพียงพอเพื่อปลดล็อกยุคใหม่</div>
+        <div class="hud hud-tr" role="group" aria-label="ความเร็วจำลอง">
+          <button class="speed-btn" data-speed="0" title="หยุดเวลา (Space)">⏸</button>
+          <button class="speed-btn active" data-speed="1" title="1×">1×</button>
+          <button class="speed-btn" data-speed="3" title="3×">3×</button>
+          <button class="speed-btn" data-speed="10" title="10×">10×</button>
+          <button class="speed-btn" data-speed="30" title="30×">30×</button>
+          <span class="speed-real" id="speedReal"></span>
+          <button class="speed-btn" id="fitButton" title="มองทั้งโลก">⤢</button>
+        </div>
+        <div class="hud hud-bl" role="toolbar" aria-label="เครื่องมือ">
+          <div id="toolBar" class="tool-bar"></div>
+          <div class="tool-hint" id="toolHint">คลิกสิ่งมีชีวิตเพื่อดูยีนและติดตาม · ลากเพื่อเลื่อน · เลื่อนล้อเพื่อซูม</div>
+        </div>
+        <div class="ticker" id="ticker" aria-live="polite"></div>
+        <aside class="inspector" id="inspector" hidden></aside>
       </div>
-      <div class="world-art" aria-label="ภาพจำลองโลกวิวัฒนาการ">
-        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <div class="planet"><div class="planet-shine"></div><div class="continent continent-one"></div><div class="continent continent-two"></div><div class="planet-ring"></div></div>
-        <div class="orbit-dot dot-one">✦</div><div class="orbit-dot dot-two">·</div><div class="orbit-dot dot-three">✧</div>
-        <div class="art-caption"><span class="live-dot"></span> SIMULATION RUNNING <span id="elapsedLabel">00:00</span></div>
-      </div>
+
+      <aside class="side">
+        <section class="panel era-card">
+          <div class="eyebrow"><span class="pulse"></span><span id="eraNumber">ERA 01</span><span class="eyebrow-divider">/</span><span id="eraType">ORIGIN OF LIFE</span></div>
+          <h1 id="eraTitle">มหาสมุทรแห่งจุดกำเนิด</h1>
+          <p id="eraDescription"></p>
+          <div id="goalList" class="goal-list"></div>
+          <button id="evolveButton" class="primary-button">🧬 วิวัฒนาการขั้นต่อไป</button>
+          <div id="evolveHint" class="muted tiny"></div>
+        </section>
+        <section class="panel live-card">
+          <div class="live-head"><h3>ประชากรสด</h3><span class="muted tiny" id="liveSub">แบ่งตามห่วงโซ่อาหาร</span></div>
+          <div class="stat-grid" id="statGrid"></div>
+          <div class="chart-box"><canvas id="popChart" height="120"></canvas><div class="chart-tip" id="chartTip" hidden></div></div>
+          <div class="legend" id="popLegend"></div>
+        </section>
+        <section class="panel mini-card"><canvas id="minimap" width="320" height="180" aria-label="แผนที่ย่อ"></canvas></section>
+      </aside>
     </section>
 
     <section class="resource-grid" id="resourceGrid" aria-label="ทรัพยากร"></section>
 
     <nav class="tabbar" aria-label="เมนูเกม">
-      <button class="tab active" data-tab="evolution">🧬 <span>วิวัฒนาการ</span></button>
+      <button class="tab active" data-tab="upgrades">⬆️ <span>อัปเกรด</span></button>
       <button class="tab" data-tab="life">🦠 <span>สิ่งมีชีวิต</span></button>
+      <button class="tab" data-tab="mutation">🧪 <span>กลายพันธุ์</span></button>
       <button class="tab" data-tab="technology">🔬 <span>เทคโนโลยี</span></button>
-      <button class="tab" data-tab="world">🌍 <span>ระบบนิเวศ</span></button>
-      <button class="tab" data-tab="archive">📜 <span>สารานุกรม</span></button>
+      <button class="tab" data-tab="world">🌍 <span>โลก / ระบบนิเวศ</span></button>
+      <button class="tab" data-tab="archive">📜 <span>คลังประวัติศาสตร์</span></button>
+      <button class="tab" data-tab="cycle">🌌 <span>เริ่มวัฏจักรใหม่</span></button>
     </nav>
 
-    <section class="view active" id="view-evolution">
-      <div class="section-heading"><div><span class="eyebrow">BUILD YOUR FUTURE</span><h2>เส้นทางการพัฒนา</h2><p>ลงทุนในสิ่งมีชีวิตและนวัตกรรม เพื่อให้โลกเติบโตด้วยตัวเอง</p></div><span class="section-counter" id="upgradeCount">0 upgrades</span></div>
-      <div id="upgradeGrid" class="upgrade-grid"></div>
+    <section class="view active" id="view-upgrades">
+      <div class="section-heading"><div><span class="eyebrow">SHAPE THE WORLD</span><h2>อัปเกรดระบบนิเวศ</h2><p>คุณไม่ได้ซื้อตัวเลข — คุณเปลี่ยนเงื่อนไขของโลก แล้วชีวิตจะตอบสนองเอง</p></div></div>
+      <div id="upgradeGrid" class="card-grid"></div>
     </section>
     <section class="view" id="view-life">
-      <div class="section-heading"><div><span class="eyebrow">NATURAL SELECTION</span><h2>สิ่งมีชีวิตและการกลายพันธุ์</h2><p>สายพันธุ์จะพัฒนาคุณสมบัติเมื่อระบบนิเวศและเทคโนโลยีเปลี่ยนไป</p></div></div>
-      <div id="organismGrid" class="organism-grid"></div>
-      <div class="panel mutation-panel"><div><span class="eyebrow">GENETIC LAB</span><h3>ห้องทดลองพันธุกรรม</h3><p>ใช้ DNA เพื่อเร่งการกลายพันธุ์ เพิ่มประสิทธิภาพการผลิตของสิ่งมีชีวิตทั้งหมด</p></div><button class="secondary-button" id="mutationButton">🧪 กลายพันธุ์ <span id="mutationCost">100 DNA</span></button></div>
+      <div class="section-heading"><div><span class="eyebrow">NATURAL SELECTION</span><h2>สายพันธุ์ที่มีชีวิต</h2><p>ทุกสายพันธุ์เกิดจากการกลายพันธุ์และการคัดเลือกโดยธรรมชาติในโลกจำลอง ไม่มีการกำหนดไว้ล่วงหน้า</p></div><span class="section-counter" id="speciesCount"></span></div>
+      <div id="speciesList" class="species-list"></div>
+      <div class="panel tree-panel"><div class="live-head"><h3>🌳 ต้นไม้วิวัฒนาการ</h3><span class="muted tiny">เส้นแนวนอน = ช่วงชีวิตของสายพันธุ์ · เส้นแนวตั้ง = การแตกแขนง</span></div><div class="tree-scroll" id="treeBox"></div></div>
+    </section>
+    <section class="view" id="view-mutation">
+      <div class="section-heading"><div><span class="eyebrow">GENETIC LAB</span><h2>ห้องทดลองพันธุกรรม</h2><p>ใช้ DNA กำหนดทิศทางวิวัฒนาการในภาพรวม — สิ่งมีชีวิตยังต้องรอดจากการคัดเลือกโดยธรรมชาติเอง</p></div></div>
+      <div class="lab-grid" id="labGrid"></div>
     </section>
     <section class="view" id="view-technology">
-      <div class="section-heading"><div><span class="eyebrow">KNOWLEDGE NEVER ENDS</span><h2>แผนผังเทคโนโลยี</h2><p>ความรู้ที่สะสมจะเปิดเส้นทางใหม่ให้เผ่าพันธุ์ของคุณ</p></div></div>
-      <div id="technologyGrid" class="technology-grid"></div>
+      <div class="section-heading"><div><span class="eyebrow">KNOWLEDGE NEVER ENDS</span><h2>แผนผังเทคโนโลยี</h2><p>ความรู้มาจากถิ่นฐานของเผ่าพันธุ์ผู้มีปัญญา เทคโนโลยีเปลี่ยนวิธีที่เมืองเติบโตและส่งผลต่อโลก</p></div></div>
+      <div id="technologyGrid" class="card-grid"></div>
     </section>
     <section class="view" id="view-world">
-      <div class="section-heading"><div><span class="eyebrow">PLANETARY SYSTEMS</span><h2>สถานะระบบนิเวศ</h2><p>ความสมดุลของโลกส่งผลต่อการผลิต ประชากร และการอยู่รอด</p></div></div>
+      <div class="section-heading"><div><span class="eyebrow">PLANETARY SYSTEMS</span><h2>โลกและระบบนิเวศ</h2><p>ภูมิอากาศ พืช และห่วงโซ่อาหารส่งผลต่อกันแบบเรียลไทม์</p></div></div>
       <div class="world-grid">
-        <div class="panel ecology-panel"><h3>ดัชนีดาวเคราะห์</h3><div id="ecologyMeters"></div></div>
-        <div class="panel"><h3>เหตุการณ์ล่าสุด</h3><div id="eventLog" class="event-log"></div></div>
+        <div class="panel"><h3>ดัชนีดาวเคราะห์</h3><div id="ecologyMeters"></div><div class="climate-row" id="climateRow"></div></div>
+        <div class="panel"><h3>ห่วงโซ่อาหาร</h3><div id="foodWeb" class="food-web"></div><h3 class="mt">ชีวมวลพืช</h3><canvas id="plantChart" class="line-chart"></canvas></div>
+        <div class="panel span2"><h3>เหตุการณ์ล่าสุด</h3><div id="eventLog" class="event-log"></div></div>
       </div>
-      <div class="panel reset-panel"><div><h3>การเกิดใหม่ของจักรวาล</h3><p>รีเซ็ตความก้าวหน้าปัจจุบันเพื่อรับ <strong>เศษซากจักรวาล</strong> ซึ่งเพิ่มโบนัสถาวรในรอบต่อไป ฟีเจอร์นี้ปลดล็อกหลังยุคอวกาศ</p></div><button class="secondary-button" id="prestigeButton" disabled>🌌 เริ่มวัฏจักรใหม่</button></div>
     </section>
     <section class="view" id="view-archive">
-      <div class="section-heading"><div><span class="eyebrow">FIELD NOTES</span><h2>สารานุกรมแห่งชีวิต</h2><p>บันทึกสิ่งมีชีวิต ยุคสมัย และความสำเร็จที่ค้นพบแล้ว</p></div></div>
+      <div class="section-heading"><div><span class="eyebrow">FIELD NOTES</span><h2>คลังประวัติศาสตร์</h2><p>ยุคที่ผ่านมา สถิติ และสายพันธุ์ที่เคยครองโลกก่อนจะสูญพันธุ์</p></div></div>
       <div id="archiveContent" class="archive-grid"></div>
     </section>
+    <section class="view" id="view-cycle">
+      <div class="section-heading"><div><span class="eyebrow">REBIRTH</span><h2>เริ่มวัฏจักรใหม่</h2><p>เมื่ออารยธรรมของคุณไปถึงอวกาศ คุณสามารถสร้างดาวดวงใหม่โดยนำเศษซากจักรวาลติดตัวไปเป็นโบนัสถาวร</p></div></div>
+      <div id="cycleContent"></div>
+    </section>
 
-    <footer class="footer"><span>ORIGIN v0.2.0 · An independent idle evolution prototype</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
+    <footer class="footer"><span id="footerVersion">ORIGIN v0.3.0 · Real-time evolution simulator</span><div><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></div></footer>
   </main>
-  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog"><div class="dialog-head"><h2>ตั้งค่าเกม</h2><button class="icon-button">✕</button></div><label class="setting-row"><span><strong>รูปแบบตัวเลข</strong><small>แสดงตัวเลขจำนวนมากแบบย่อ</small></span><input id="compactNumbers" type="checkbox" checked></label><label class="setting-row"><span><strong>เอฟเฟกต์ภาพ</strong><small>ปิดเพื่อลดการใช้ทรัพยากร</small></span><input id="effectsToggle" type="checkbox" checked></label><p class="muted tiny">ข้อมูลเกมถูกบันทึกไว้ในเบราว์เซอร์เครื่องนี้</p><button class="primary-button full">เสร็จสิ้น</button></form></dialog>
+
+  <dialog id="settingsDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>ตั้งค่าเกม</h2><button class="icon-button" value="close">✕</button></div>
+    <label class="setting-row"><span><strong>ตัวเลขแบบย่อ</strong><small>แสดง 12.5K แทน 12,500</small></span><input id="compactNumbers" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>รายละเอียดภาพ</strong><small>รูปร่างสิ่งมีชีวิต พืช และเอฟเฟกต์ — ปิดเพื่อประหยัดเครื่อง</small></span><input id="effectsToggle" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>จำลองต่อเมื่อสลับแท็บ</strong><small>โลกยังเดินต่อแม้คุณไม่ได้ดูหน้านี้</small></span><input id="bgToggle" type="checkbox" checked></label>
+    <p class="muted tiny">ข้อมูลเกมบันทึกในเบราว์เซอร์เครื่องนี้ ส่งออกเซฟไว้หากต้องการย้ายเครื่อง</p>
+    <button class="primary-button full" value="close">เสร็จสิ้น</button>
+  </form></dialog>
+
+  <dialog id="helpDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>วิธีเล่น ORIGIN</h2><button class="icon-button" value="close">✕</button></div>
+    <ul class="help-list">
+      <li><b>ทุกจุดบนแผนที่คือสิ่งมีชีวิตจริง</b> — แต่ละตัวมียีน 10 ตัว ว่ายน้ำ เดิน หาอาหาร หนีผู้ล่า สืบพันธุ์ และตาย</li>
+      <li><b>ลูกได้ยีนจากพ่อแม่พร้อมการกลายพันธุ์</b> ตัวที่เหมาะกับสิ่งแวดล้อมจะรอดและมีลูกมากกว่า เมื่อยีนห่างจากบรรพบุรุษมากพอจะเกิดสายพันธุ์ใหม่</li>
+      <li><b>คุณคือผู้วางแผนวิวัฒนาการ</b> — อัปเกรดโลก กำหนดแรงคัดเลือก ปลูกอาหาร เปลี่ยนภูมิอากาศ หรือส่งอุกกาบาต</li>
+      <li><b>บรรลุเป้าหมายของยุค</b> แล้วใช้ DNA/ความรู้ปลดล็อกยุคใหม่ ยุคใหม่เปิดขีดจำกัดทางชีววิทยา เช่น ขึ้นบกได้ หรือฉลาดขึ้นได้</li>
+      <li><b>เปิดทิ้งไว้ได้</b> — โลกเดินต่อในพื้นหลังและจำลองย้อนหลังเมื่อคุณกลับมา</li>
+      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิกการเลือก</li>
+    </ul>
+    <button class="primary-button full" value="close">เริ่มเลย</button>
+  </form></dialog>
+
+  <dialog id="welcomeDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>ยินดีต้อนรับกลับ</h2></div>
+    <div id="welcomeBody"></div>
+    <button class="primary-button full" value="close">กลับสู่โลก</button>
+  </form></dialog>
+
+  <div class="catchup" id="catchup" hidden><div class="panel catchup-box"><strong>กำลังจำลองช่วงเวลาที่คุณไม่อยู่…</strong><div class="progress-track"><div class="progress-fill" id="catchupBar"></div></div><small class="muted" id="catchupText"></small></div></div>
   <div id="toast" class="toast" role="status"></div>
   <script type="module" src="src/main.js"></script>
 </body>
