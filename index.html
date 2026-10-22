@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="th" data-ui-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="claude:viewport-fit-sides" content="cover">
+  <meta name="theme-color" content="#1f2424">
+  <title>ORIGIN — Evolution Simulator</title>
+  <meta name="description" content="ORIGIN — เกมจำลองวิวัฒนาการแบบเรียลไทม์ เฝ้าดูชีวิตบนดาวเคราะห์ของคุณวิวัฒน์จากเซลล์แรกจนถึงอารยธรรมอวกาศ">
+  <meta property="og:title" content="ORIGIN — Evolution Simulator">
+  <meta property="og:description" content="เกมจำลองวิวัฒนาการแบบเรียลไทม์ บนดาวเคราะห์ที่มีชีวิต">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%90%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="top-left">
+        <span class="brand">ORIGIN</span>
+        <span class="top-era"><span id="topEraIcon">🌊</span> <span id="topEraName">มหาสมุทรแห่งจุดกำเนิด</span></span>
+      </div>
+      <div class="calendar" id="calendar" title="เวลาในโลกจำลอง">
+        <span class="live-dot" id="liveDot"></span>
+        <span id="calYear">ปีที่ 1</span><span id="calDay">วันที่ 1</span>
+        <span id="calSky">☀️ 06:00</span><span id="calTemp" class="has-warning">15.0°C</span>
+        <span id="hudGen" class="muted">รุ่นที่ 0</span>
+      </div>
+      <div class="top-right">
+        <div class="speed" role="group" aria-label="ความเร็วจำลอง">
+          <button class="speed-btn" data-speed="0" title="หยุดเวลา (Space)">❚❚</button>
+          <button class="speed-btn active" data-speed="1" title="1×">1×</button>
+          <button class="speed-btn" data-speed="3" title="3×">3×</button>
+          <button class="speed-btn" data-speed="10" title="10×">10×</button>
+          <button class="speed-btn" data-speed="30" title="30×">30×</button>
+          <span class="speed-real" id="speedReal"></span>
+        </div>
+        <span class="save-state" id="saveState">บันทึกอัตโนมัติ</span>
+        <button class="top-btn" id="helpButton" title="วิธีเล่น">?</button>
+        <button class="top-btn" id="settingsButton" title="ตั้งค่า">⚙</button>
+      </div>
+    </header>
+
+    <div class="columns">
+      <aside class="leftColumn" aria-label="ทรัพยากรและความก้าวหน้า">
+        <section class="era-box">
+          <div class="era-head"><span id="eraNumber" class="has-special">ERA 01</span> · <span id="eraType" class="muted">ORIGIN OF LIFE</span></div>
+          <h1 id="eraTitle">มหาสมุทรแห่งจุดกำเนิด</h1>
+          <p id="eraDescription" class="muted small"></p>
+          <div id="goalList" class="goal-list"></div>
+          <button id="evolveButton" class="evo-button">วิวัฒนาการขั้นต่อไป</button>
+          <div id="evolveHint" class="muted small"></div>
+        </section>
+        <section class="resources" id="resourceList" aria-label="ทรัพยากร"></section>
+        <canvas id="minimap" width="320" height="180" aria-label="แผนที่ย่อ คลิกเพื่อย้ายกล้อง"></canvas>
+      </aside>
+
+      <main class="mainColumn">
+        <nav class="tabs" aria-label="เมนูเกม">
+          <button class="tab active" data-tab="map">โลก</button>
+          <button class="tab" data-tab="upgrades">อัปเกรด</button>
+          <button class="tab" data-tab="life">สิ่งมีชีวิต</button>
+          <button class="tab" data-tab="mutation">กลายพันธุ์</button>
+          <button class="tab" data-tab="technology">เทคโนโลยี</button>
+          <button class="tab" data-tab="world">ระบบนิเวศ</button>
+          <button class="tab" data-tab="stats">สถิติ</button>
+          <button class="tab" data-tab="archive">คลังประวัติศาสตร์</button>
+          <button class="tab" data-tab="cycle">วัฏจักรใหม่</button>
+        </nav>
+
+        <section class="view active" id="view-map">
+          <div class="world-wrap" id="worldWrap">
+            <canvas id="world" aria-label="โลกจำลองแบบเรียลไทม์ (แผนที่ 2 มิติ)"></canvas>
+            <canvas id="world3d" aria-label="โลกจำลองแบบเรียลไทม์ (3 มิติ)" hidden></canvas>
+            <div class="hud hud-tr" role="group" aria-label="มุมมอง">
+              <span class="view-group" id="viewGroup" role="group" aria-label="มุมมองโลก"><button class="hud-btn" data-view="planet" title="ดาวเคราะห์ทั้งดวงลอยในอวกาศ (V)">🪐 ดาว</button><button class="hud-btn" data-view="3d" title="ภูมิประเทศ 3D แบบแผ่น (V)">3D</button><button class="hud-btn" data-view="2d" title="แผนที่ 2D (V)">2D</button></span>
+              <span class="rot-group" id="rotGroup" hidden><button class="hud-btn" data-rot="-1" title="หมุนซ้าย (Q)">⟲</button><button class="hud-btn" data-rot="1" title="หมุนขวา (E)">⟳</button><button class="hud-btn" data-tilt="1" title="มองจากด้านบน">⤒</button><button class="hud-btn" data-tilt="-1" title="มองแนวราบ">⤓</button></span>
+              <button class="hud-btn" id="fitButton" title="มองทั้งโลก (F)">⤢</button>
+            </div>
+            <div class="hud hud-bl" role="toolbar" aria-label="เครื่องมือ">
+              <div id="toolBar" class="tool-bar"></div>
+              <div class="tool-hint" id="toolHint"></div>
+            </div>
+            <div class="ticker" id="ticker" aria-live="polite"></div>
+            <aside class="inspector" id="inspector" hidden></aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-upgrades">
+          <p class="view-intro">อัปเกรดเปลี่ยนเงื่อนไขของโลก แล้วชีวิตจะตอบสนองเอง วางเมาส์บนปุ่มเพื่อดูรายละเอียด</p>
+          <div id="upgradeGrid" class="action-grid"></div>
+        </section>
+        <section class="view" id="view-life">
+          <p class="view-intro"><span id="speciesCount"></span></p>
+          <div class="table-wrap"><table class="data-table" id="speciesList"></table></div>
+          <h2 class="sub-head">ต้นไม้วิวัฒนาการ <span class="muted small">เส้นแนวนอน = ช่วงชีวิตของสายพันธุ์ · เส้นแนวตั้ง = การแตกแขนง</span></h2>
+          <div class="tree-scroll" id="treeBox"></div>
+        </section>
+        <section class="view" id="view-mutation">
+          <p class="view-intro">ใช้ DNA กำหนดทิศทางวิวัฒนาการในภาพรวม สิ่งมีชีวิตยังต้องรอดจากการคัดเลือกโดยธรรมชาติเอง</p>
+          <div id="labGrid"></div>
+        </section>
+        <section class="view" id="view-technology">
+          <p class="view-intro">ความรู้มาจากถิ่นฐานของเผ่าพันธุ์ผู้มีปัญญา เทคโนโลยีเปลี่ยนวิธีที่เมืองเติบโตและส่งผลต่อโลก</p>
+          <div id="technologyGrid" class="action-grid"></div>
+        </section>
+        <section class="view" id="view-world">
+          <div class="split">
+            <div><h2 class="sub-head">ดัชนีดาวเคราะห์</h2><div id="ecologyMeters"></div><div class="action-grid" id="climateRow"></div></div>
+            <div><h2 class="sub-head">ห่วงโซ่อาหาร</h2><div id="foodWeb" class="food-web"></div></div>
+          </div>
+        </section>
+        <section class="view" id="view-stats">
+          <div id="statGrid" class="stat-grid"></div>
+          <h2 class="sub-head">ประชากรตามห่วงโซ่อาหาร</h2>
+          <div class="chart-box"><canvas id="popChart"></canvas><div class="chart-tip" id="chartTip" hidden></div></div>
+          <div class="legend" id="popLegend"></div>
+          <h2 class="sub-head">ชีวมวลพืช</h2>
+          <canvas id="plantChart" class="line-chart"></canvas>
+        </section>
+        <section class="view" id="view-archive"><div id="archiveContent"></div></section>
+        <section class="view" id="view-cycle"><div id="cycleContent"></div></section>
+      </main>
+
+      <aside class="rightColumn" aria-label="บันทึกเหตุการณ์">
+        <div class="msg-head"><span>บันทึกเหตุการณ์</span></div>
+        <div class="msg-filters" id="msgFilters">
+          <button class="active" data-filter="all">ทั้งหมด</button><button data-filter="evo">วิวัฒนาการ</button><button data-filter="death">สูญพันธุ์</button><button data-filter="climate">ภูมิอากาศ</button><button data-filter="civ">อารยธรรม</button><button data-filter="you">คุณ</button>
+        </div>
+        <div class="msg-log" id="msgLog" aria-live="polite"></div>
+      </aside>
+    </div>
+
+    <footer class="footer"><span id="footerVersion">ORIGIN</span><span><button class="text-button" id="exportSave">ส่งออกเซฟ</button><button class="text-button" id="importSave">นำเข้าเซฟ</button><button class="text-button danger" id="resetGame">เริ่มเกมใหม่</button><input type="file" id="importFile" accept="application/json" hidden></span></footer>
+  </div>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+
+  <dialog id="settingsDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>ตั้งค่าเกม</h2><button class="top-btn" value="close">✕</button></div>
+    <label class="setting-row"><span><strong>ธีมสี</strong><small>ชุดสีแบบเดียวกับเกม Evolve</small></span>
+      <select id="themeSelect">
+        <option value="dark">Dark</option><option value="light">Light</option><option value="night">Night</option><option value="darkNight">Dark Night</option>
+        <option value="redgreen">Red-Green (ตาบอดสี)</option><option value="gruvboxDark">GruvBox Dark</option><option value="gruvboxLight">GruvBox Light</option>
+        <option value="orangeSoda">Orange Soda</option><option value="dracula">Dracula</option>
+      </select></label>
+    <label class="setting-row"><span><strong>ตัวเลขแบบย่อ</strong><small>แสดง 12.5K แทน 12,500</small></span><input id="compactNumbers" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>รายละเอียดภาพ</strong><small>รูปร่างสิ่งมีชีวิต พืช และเอฟเฟกต์ — ปิดเพื่อประหยัดเครื่อง</small></span><input id="effectsToggle" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>กลางวัน–กลางคืนและสภาพอากาศ</strong><small>เมฆ ฝน หิมะ และแสงเมืองยามค่ำ</small></span><input id="weatherToggle" type="checkbox" checked></label>
+    <label class="setting-row"><span><strong>จำลองต่อเมื่อสลับแท็บ</strong><small>โลกยังเดินต่อแม้คุณไม่ได้ดูหน้านี้</small></span><input id="bgToggle" type="checkbox" checked></label>
+    <p class="muted small">ข้อมูลเกมบันทึกในเบราว์เซอร์เครื่องนี้</p>
+    <button class="evo-button" value="close">เสร็จสิ้น</button>
+  </form></dialog>
+
+  <dialog id="helpDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>วิธีเล่น ORIGIN</h2><button class="top-btn" value="close">✕</button></div>
+    <ul class="help-list">
+      <li><b>ทุกจุดบนแผนที่คือสิ่งมีชีวิตจริง</b> มียีน 13 ตัว ว่ายน้ำ เดิน บิน หาอาหาร หนีผู้ล่า สืบพันธุ์ และตาย</li>
+      <li><b>สิ่งมีชีวิตกว่า 30 กลุ่ม</b> ตั้งแต่จุลชีพ ปลา ฉลาม แมลง ไดโนเสาร์ นก ไปจนถึงช้าง เสือ และมนุษย์ ร่างกายเกิดจากยีนของมันเอง</li>
+      <li><b>คุณคือผู้วางแผนวิวัฒนาการ</b> อัปเกรดโลก กำหนดแรงคัดเลือก ปลูกอาหาร เปลี่ยนภูมิอากาศ หรือส่งอุกกาบาต</li>
+      <li><b>ทำเป้าหมายของยุคให้ครบ</b> (คอลัมน์ซ้ายบน) แล้วกดวิวัฒนาการเพื่อปลดล็อกยุคใหม่</li>
+      <li><b>มุมมอง 3D/2D</b> สลับที่มุมขวาบนของแผนที่ ใน 3D คลิกขวาหรือ Shift+ลากเพื่อหมุนกล้อง</li>
+      <li>คีย์ลัด: <kbd>Space</kbd> หยุด/เล่น · <kbd>1</kbd>–<kbd>4</kbd> ความเร็ว · <kbd>V</kbd> สลับ ดาวเคราะห์/3D/2D · <kbd>Q</kbd>/<kbd>E</kbd> หมุนกล้อง · <kbd>F</kbd> มองทั้งโลก · <kbd>Esc</kbd> ยกเลิก</li>
+    </ul>
+    <button class="evo-button" value="close">เริ่มเลย</button>
+  </form></dialog>
+
+  <dialog id="welcomeDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2>ยินดีต้อนรับกลับ</h2></div>
+    <div id="welcomeBody"></div>
+    <button class="evo-button" value="close">กลับสู่โลก</button>
+  </form></dialog>
+
+  <dialog id="confirmDialog" class="dialog"><form method="dialog">
+    <div class="dialog-head"><h2 id="confirmTitle">ยืนยัน</h2></div>
+    <p id="confirmText" class="muted"></p>
+    <div class="confirm-actions"><button class="action-btn" value="cancel">ยกเลิก</button><button class="evo-button" value="ok" id="confirmOk">ยืนยัน</button></div>
+  </form></dialog>
+
+  <div class="catchup" id="catchup" hidden><div class="catchup-box"><strong>กำลังจำลองช่วงเวลาที่คุณไม่อยู่…</strong><div class="progress-track"><div class="progress-fill" id="catchupBar"></div></div><small class="muted" id="catchupText"></small></div></div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="three.min.js"></script>
+  <script type="module" src="game.js"></script>
+</body>
+</html>
