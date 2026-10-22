@@ -1,6 +1,6 @@
 {
   "name": "origin-evolution-idle",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "ORIGIN — a real-time evolution simulator / idle game in the browser",
   "type": "module",

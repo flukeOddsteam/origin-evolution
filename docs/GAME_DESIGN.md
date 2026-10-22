@@ -28,6 +28,12 @@
 - ขอบแผนที่เป็นทะเลอยู่แล้ว รอยต่อที่ลองจิจูด 0 จึงจมใต้มหาสมุทร ส่วนขั้วโลกปิดด้วยแผ่นน้ำแข็ง
 - ดวงอาทิตย์อยู่เหนือเส้นเมริเดียนกลางแผนที่ตอนเที่ยงตามนาฬิกาในเกม
 
+## Biodiversity (v0.8)
+- 63 body plans are classified from genes plus the preferred temperature gene (`thermal`), e.g. a hot-adapted grazer is a camel, a cold-adapted giant herbivore is a mammoth.
+- Niche partitioning: every body plan has home biomes (`HOME` in archetypes.js). Grazing there is ×1.6, elsewhere ×0.65, and foraging prefers home biomes.
+- Kill-the-winner: a body plan above 20% of all animals loses breeding attempts in proportion to its excess share (`CROWD` in sim.js).
+- Empty niches are re-filled every 15 sim seconds (`NICHE_EVERY`); climate-bound niches (camel, mammoth, penguin, reef fish, scorpion) only appear where the local temperature fits.
+
 ## Long-term roadmap
 - v0.3: สายวิวัฒนาการแบบ branching, trait selection และเหตุการณ์สุ่มที่มีผลต่อระบบนิเวศ
 - v0.4: ภาพสิ่งมีชีวิต procedural, biomes และแผนที่โลกที่ตอบสนองต่อการเปลี่ยนยุค

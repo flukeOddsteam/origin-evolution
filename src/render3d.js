@@ -5,13 +5,15 @@
 import { WORLD_W, WORLD_H, CELL, GW, GH, B, BIOMES, hash } from "./sim/world.js";
 import { archetypeOf } from "./sim/archetypes.js";
 import { paletteFor } from "./creatures.js";
-import { MODELS, farPart, animate, PLACEMENT } from "./models3d.js";
+import { MODELS, farPart, animate, PLACEMENT, BOB } from "./models3d.js";
 import { DAY_TICKS } from "./render.js";
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const LAND_SCALE = 360, SEA_SCALE = 170; // vertical exaggeration above / below sea level
 const CAP = { sph: 16000, ico: 12000, cone: 10000, cyl: 20000, box: 8000, tet: 3000, torus: 600 };
+// creatures use their own smooth-shaded, higher-resolution primitives
+const CCAP = { sph: 32000, ico: 3000, cone: 12000, cyl: 12000, tcyl: 30000, box: 9000, tet: 3000, torus: 2000, ring: 8000 };
 // planet ("globe") mode: the flat world is wrapped round a small sphere floating in space
 export const PLANET_R = WORLD_W / TAU;          // equator length = world width, so x keeps its scale
 const LAT_SPAN = Math.PI * 0.86;               // the map covers this band of latitude; ice caps close the poles
@@ -78,6 +80,17 @@ export class Renderer3D {
       m.setColorAt(0, new THREE.Color(1, 1, 1));
       m.frustumCulled = false; m.count = 0;
       S.add(m); this.inst[k] = m;
+    }
+    const cgeo = {
+      sph: new THREE.SphereGeometry(1, 14, 10), ico: new THREE.IcosahedronGeometry(1, 1), cone: new THREE.ConeGeometry(1, 2, 12), cyl: new THREE.CylinderGeometry(1, 1, 2, 10),
+      tcyl: new THREE.CylinderGeometry(1, 0.6, 2, 10), box: new THREE.BoxGeometry(2, 2, 2), tet: new THREE.TetrahedronGeometry(1), torus: new THREE.TorusGeometry(1, 0.45, 8, 18), ring: new THREE.TorusGeometry(1, 0.09, 5, 26),
+    };
+    const cmat = new THREE.MeshPhongMaterial({ shininess: 22, specular: 0x1c1c1c });
+    this.cinst = {};
+    for (const k of Object.keys(cgeo)) {
+      const m = new THREE.InstancedMesh(cgeo[k], cmat, CCAP[k]);
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, new THREE.Color(1, 1, 1));
+      m.frustumCulled = false; m.count = 0; S.add(m); this.cinst[k] = m;
     }
     // glowing things that ignore lighting: windows, fires, rockets
     this.glow = new THREE.InstancedMesh(this.geos.box, new THREE.MeshBasicMaterial({ color: 0xffd27a }), 4000);
@@ -326,7 +339,13 @@ export class Renderer3D {
   dayLabel() { const p = (this.sim.tick % DAY_TICKS) / DAY_TICKS; const h = (6 + p * 24) % 24; return `${String(Math.floor(h)).padStart(2, "0")}:${String(Math.floor((h % 1) * 60)).padStart(2, "0")}`; }
 
   // ------------------------------------------------------------ instancing helpers
-  resetInstances() { for (const k in this.inst) this.inst[k].count = this.base?.[k] || 0; this.glow.count = this.glowBase || 0; }
+  resetInstances() { for (const k in this.inst) this.inst[k].count = this.base?.[k] || 0; for (const k in this.cinst) this.cinst[k].count = 0; this.glow.count = this.glowBase || 0; }
+  /** Add one creature part (smooth primitives, separate from scenery). */
+  pushC(geo, matrix, color) {
+    const m = this.cinst[geo] || this.cinst.sph;
+    if (m.count >= CCAP[geo]) return;
+    m.setMatrixAt(m.count, matrix); m.setColorAt(m.count, color); m.count++;
+  }
   push(geo, matrix, color) {
     const m = this.inst[geo];
     if (m.count >= CAP[geo]) return;
@@ -343,8 +362,8 @@ export class Renderer3D {
       this._l.compose(this._p, this._q, this._one);
       const box = part.g === "box";
       const ox = part.pivot === "x" && box ? -part.sx : 0;
-      const oy = part.pivot === "y" ? -part.sy : !box ? part.sy : 0;
-      const oz = box && part.pivot === "z+" ? part.sz : box && part.pivot === "z-" ? -part.sz : 0;
+      const oy = part.pivot === "y" ? -part.sy : !box ? part.sy + (part.off || 0) : 0;
+      const oz = box && part.pivot === "z+" ? part.sz + (part.off || 0) : box && part.pivot === "z-" ? -part.sz - (part.off || 0) : 0;
       this._t.makeScale(part.sx, part.sy, part.sz); this._t.setPosition(ox, oy, oz);
       this._l.multiply(this._t);
     }
@@ -352,12 +371,11 @@ export class Renderer3D {
   }
 
   colorsFor(sp, arch) {
-    const key = arch + ((sp.hue / 6) | 0);
-    if (sp._c3Key === key) return sp._c3;
     const P = paletteFor(sp, arch);
+    if (sp._c3Src === P && sp._c3) return sp._c3;
     const mk = (css) => new THREE.Color().setStyle(css.replace(/hsla\(([^,]+),([^,]+),([^,]+),[^)]+\)/, "hsl($1,$2,$3)"));
     sp._c3 = { b: mk(P.base), d: mk(P.dark), l: mk(P.light), e: new THREE.Color(0x14161c), w: new THREE.Color(0xf2ece0), k: new THREE.Color(0x1b1712) };
-    sp._c3Key = key;
+    sp._c3Src = P;
     return sp._c3;
   }
 
@@ -477,7 +495,7 @@ export class Renderer3D {
     this.resetInstances();
     this.drawCreatures(time);
     this.drawGlow(time);
-    for (const k in this.inst) { const m = this.inst[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+    for (const set of [this.inst, this.cinst]) for (const k in set) { const m = set[k]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     this.glow.instanceMatrix.needsUpdate = true;
 
     this.updateSky(time);
@@ -506,23 +524,32 @@ export class Renderer3D {
       else if (place === "surface") y = -r * 0.45;
       else if (place === "air") y = Math.max(ground, 0) + (16 + r * 3 + Math.sin(time / 600 + c.id) * 3) * (G ? 0.45 : 1);
       else y = Math.max(ground, place === "ground" && ground < 0 ? -r * 0.4 : ground);
+      const ph = time / (100 + c.r * 9) + c.id * 1.7; // big animals stride more slowly
+      if (BOB.has(arch) && c.mode !== 1) y += Math.abs(Math.cos(ph)) * r * 0.045;
       this._e.set(0, -c.a, 0); this._q.setFromEuler(this._e);
       this._p.set(c.x, y, c.y); this._s.set(r, r, r);
       this.compose(base, this._p, this._q, this._s);
       const C = this.colorsFor(sp, arch);
       if (arch === "human") { C.c = C.c || new THREE.Color(); C.s = C.s || new THREE.Color(); C.h = C.h || new THREE.Color(); }
       const dist = Math.sqrt(d2);
-      if (dist > near || !this.effects) { const part = farPart(arch); this.push(part.g, this.partMatrix(base, part, null), C.b); continue; }
-      const ph = time / 160 + c.id * 1.7;
+      if (dist > near || !this.effects) { const part = farPart(arch); this.pushC(part.g, this.partMatrix(base, part, null), C.b); continue; }
       if (arch === "human") {
         C.c.setHSL(((c.id * 47) % 360) / 360, sim.era >= 6 ? 0.45 : 0.25, sim.era >= 6 ? 0.48 : 0.38);
         C.s.setHex([0xe2b48f, 0xc99a74, 0xa8764f, 0x7c5638][c.id % 4]); C.h.setHex([0x2b1d14, 0x4a3020, 0x151515, 0x7a5530][(c.id >> 2) % 4]);
       }
-      const parts = MODELS[arch] || MODELS.fish, detail = dist < near * 0.5;
+      const parts = MODELS[arch] || MODELS.fish, detail = dist < near * 0.5, pat = sp.pattern || 0;
       for (const part of parts) {
-        if (!detail && (part.c === "e" || part.sx < 0.12)) continue;
+        if (part.pat && part.pat !== pat) continue;
+        if (!detail && (part.c === "e" || (part.sx < 0.1 && part.sz < 0.1) || part.pat)) continue;
         const col = typeof part.c === "number" ? this._c.setHex(part.c) : C[part.c] || C.b;
-        this.push(part.g, this.partMatrix(base, part, part.anim ? animate(part.anim, ph, anim) : null), col);
+        let a = null;
+        if (part.anim) {
+          a = animate(part.anim, ph, anim);
+          if (part.knee) { // lower leg hangs from the swinging upper leg and flexes at the knee
+            const t = a.z; a.px += part.knee * Math.sin(t); a.py += part.knee * (1 - Math.cos(t)); a.z = t - a.bend;
+          }
+        }
+        this.pushC(part.g, this.partMatrix(base, part, a), col);
       }
     }
   }

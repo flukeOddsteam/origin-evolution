@@ -9,17 +9,27 @@ const TONE = {
   fish: [0.9, 58, 58, 200], predfish: [0.7, 45, 50, 120], shark: [0.15, 14, 56, 210], whale: [0.2, 18, 40, 215],
   frog: [0.55, 55, 45, 110], croc: [0.25, 30, 32, 85], turtle: [0.35, 35, 40, 70], insect: [0.85, 65, 42, 20],
   flyinsect: [1, 80, 60, 40], lizard: [0.55, 45, 45, 100], ceratops: [0.4, 30, 45, 40], sauropod: [0.4, 25, 48, 80],
-  theropod: [0.45, 35, 40, 25], bird: [0.95, 60, 56, 200], raptor: [0.3, 40, 38, 30], rodent: [0.25, 25, 45, 30],
+  theropod: [0.45, 35, 40, 25], bird: [0.6, 55, 52, 30], raptor: [0.3, 40, 38, 30], rodent: [0.25, 25, 45, 30],
   deer: [0.25, 45, 45, 28], bovid: [0.2, 25, 30, 25], elephant: [0.1, 8, 48, 30], wolf: [0.15, 10, 50, 30],
   bigcat: [0.25, 65, 52, 34], bear: [0.2, 35, 28, 25], ape: [0.2, 30, 30, 25], human: [1, 45, 45, 0],
+  starfish: [0.6, 65, 55, 20], lobster: [0.4, 60, 40, 5], octopus: [0.5, 50, 48, 15], reeffish: [1, 85, 58, 40], eel: [0.3, 35, 40, 80],
+  ray: [0.2, 20, 42, 30], dolphin: [0.1, 12, 56, 210], salamander: [0.7, 70, 50, 20], seal: [0.1, 10, 42, 30], capybara: [0.1, 40, 40, 28], hippo: [0.1, 15, 45, 340],
+  penguin: [0, 10, 18, 220], spider: [0.3, 25, 25, 30], scorpion: [0.3, 45, 45, 40], snail: [0.4, 40, 50, 35], snake: [0.6, 50, 40, 90],
+  stego: [0.4, 35, 42, 70], pterosaur: [0.4, 30, 45, 20], parrot: [1, 85, 50, 120], wader: [0.3, 55, 72, 350], ratite: [0.1, 10, 28, 30],
+  bat: [0.1, 15, 24, 20], rabbit: [0.15, 25, 55, 30], boar: [0.1, 25, 28, 20], horse: [0.25, 45, 36, 25], camel: [0.1, 45, 62, 35],
+  giraffe: [0.1, 70, 58, 35], rhino: [0.05, 6, 48, 30], mammoth: [0.1, 40, 30, 22], fox: [0.15, 80, 50, 22], monkey: [0.2, 30, 38, 28],
 };
+// fur and feathers that turn pale in the cold (polar bear, arctic fox, snow leopard, snowy owl…)
+const SNOW_COAT = new Set(["bear", "fox", "wolf", "rabbit", "bigcat", "raptor", "bird", "seal", "rodent", "bovid", "deer"]);
 function mixHue(a, b, t) { const d = ((b - a + 540) % 360) - 180; return (a + d * t + 360) % 360; }
 const hsl = (h, s, l, a = 1) => `hsla(${h | 0},${s | 0}%,${Math.max(0, Math.min(100, l)) | 0}%,${a})`;
 
 export function paletteFor(sp, arch) {
-  const key = arch + ((sp.hue / 6) | 0);
+  const snow = SNOW_COAT.has(arch) && sp.avg && sp.avg.thermal < 0.25;
+  const key = arch + ((sp.hue / 6) | 0) + (snow ? "s" : "");
   if (sp._palKey === key) return sp._pal;
-  const [keep, sat, light, toward] = TONE[arch] || TONE.fish;
+  let [keep, sat, light, toward] = TONE[arch] || TONE.fish;
+  if (snow) { sat *= 0.25; light = Math.max(light, 84); }
   const h = mixHue(toward, sp.hue, keep);
   sp._pal = {
     h, base: hsl(h, sat, light), dark: hsl(h, sat, light - 16), deep: hsl(h, sat * 0.8, light - 28), light: hsl(h, sat * 0.8, light + 16),
@@ -468,17 +478,146 @@ D.human = (ctx, r, g, P, ph, o) => {
   ell(ctx, s * 0.16, 0, s * 0.17, s * 0.2, 0, skin);
 };
 
+// ------------------------------------------------------------------ added body plans
+D.starfish = (ctx, r, g, P, ph) => {
+  const arms = 5, rot = ph * 0.05;
+  ctx.fillStyle = P.base; ctx.beginPath();
+  for (let k = 0; k < arms * 2; k++) { const a = rot + (k / (arms * 2)) * TAU, rr = k % 2 ? r * 0.38 : r * 1.25; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fill();
+  for (let k = 0; k < arms; k++) { const a = rot + (k / arms) * TAU; for (let j = 1; j < 4; j++) ell(ctx, Math.cos(a) * r * 0.28 * j, Math.sin(a) * r * 0.28 * j, r * 0.07, r * 0.07, 0, P.light); }
+  ell(ctx, 0, 0, r * 0.22, r * 0.22, 0, P.dark);
+};
+D.lobster = (ctx, r, g, P, ph, o) => {
+  const len = r * 1.4, wid = r * 0.45;
+  for (let k = 0; k < 5; k++) ell(ctx, -len * (0.25 + k * 0.17), 0, wid * (0.9 - k * 0.1), wid * (0.85 - k * 0.1), 0, k % 2 ? P.dark : P.base);
+  ctx.fillStyle = P.dark; ctx.beginPath(); ctx.moveTo(-len * 1.05, 0); ctx.lineTo(-len * 1.35, -wid * 0.8); ctx.lineTo(-len * 1.25, 0); ctx.lineTo(-len * 1.35, wid * 0.8); ctx.fill();
+  for (const side of [-1, 1]) {
+    for (let k = 0; k < 4; k++) line(ctx, len * (0.2 - k * 0.15), side * wid * 0.6, len * (0.1 - k * 0.15) + Math.sin(ph * 2 + k) * r * 0.08, side * wid * 1.5, r * 0.06, P.deep);
+    line(ctx, len * 0.45, side * wid * 0.5, len * 0.85, side * wid * 1.4, r * 0.12, P.dark);
+    ell(ctx, len * 1.05, side * wid * 1.5, r * 0.38, r * 0.2, side * 0.3, P.base);
+    line(ctx, len * 0.6, side * wid * 0.2, len * 1.6, side * wid * (1.6 + Math.sin(ph) * 0.2), r * 0.03, P.dark);
+  }
+  ell(ctx, len * 0.2, 0, len * 0.5, wid, 0, P.base);
+  eye(ctx, len * 0.62, -wid * 0.35, r * 0.07, false); eye(ctx, len * 0.62, wid * 0.35, r * 0.07, false);
+};
+D.octopus = (ctx, r, g, P, ph) => {
+  ctx.lineCap = "round";
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * TAU + 0.2, w = Math.sin(ph * 1.2 + k) * 0.5;
+    ctx.strokeStyle = k % 2 ? P.base : P.dark; ctx.lineWidth = r * 0.22; ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(Math.cos(a + w * 0.3) * r * 1.1, Math.sin(a + w * 0.3) * r * 1.1, Math.cos(a + w) * r * 1.8, Math.sin(a + w) * r * 1.8); ctx.stroke();
+  }
+  ell(ctx, -r * 0.25, 0, r * 0.85, r * 0.7, 0, P.base);
+  ell(ctx, -r * 0.4, -r * 0.15, r * 0.35, r * 0.2, 0, "rgba(255,255,255,.15)");
+  eye(ctx, r * 0.3, -r * 0.38, r * 0.15); eye(ctx, r * 0.3, r * 0.38, r * 0.15);
+};
+D.reeffish = (ctx, r, g, P, ph, o) => {
+  const len = r * 1.1, wid = r * 0.85;
+  fishBody(ctx, len, wid, P, ph * 2, wid * 0.3);
+  ctx.save(); ctx.beginPath(); ctx.ellipse(0, 0, len, wid, 0, 0, TAU); ctx.clip();
+  for (let k = -1; k <= 1; k++) ell(ctx, k * len * 0.55, 0, len * 0.09, wid, 0, "rgba(255,255,255,.85)");
+  ctx.restore();
+  eye(ctx, len * 0.62, -wid * 0.35, r * 0.15); eye(ctx, len * 0.62, wid * 0.35, r * 0.15);
+};
+D.eel = (ctx, r, g, P, ph) => {
+  const n = 9;
+  ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = P.base; ctx.lineWidth = r * 0.45; ctx.beginPath();
+  for (let k = 0; k < n; k++) { const x = r * 1.2 - k * r * 0.42, y = Math.sin(ph * 1.6 - k * 0.7) * r * 0.45 * (k / n); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.stroke(); ctx.strokeStyle = P.light; ctx.lineWidth = r * 0.1; ctx.stroke();
+  ell(ctx, r * 1.3, 0, r * 0.35, r * 0.26, 0, P.base);
+  eye(ctx, r * 1.38, -r * 0.14, r * 0.07, false); eye(ctx, r * 1.38, r * 0.14, r * 0.07, false);
+};
+D.ray = (ctx, r, g, P, ph, o) => {
+  const s = Math.sin(ph * 0.9) * 0.18, span = r * 1.7;
+  ctx.fillStyle = P.base; ctx.beginPath(); ctx.moveTo(r * 0.9, 0);
+  ctx.quadraticCurveTo(r * 0.3, -span * (1 + s), -r * 0.4, -span * (0.95 + s)); ctx.quadraticCurveTo(-r * 0.3, -span * 0.3, -r * 0.8, 0);
+  ctx.quadraticCurveTo(-r * 0.3, span * 0.3, -r * 0.4, span * (0.95 + s)); ctx.quadraticCurveTo(r * 0.3, span * (1 + s), r * 0.9, 0); ctx.fill();
+  line(ctx, -r * 0.7, 0, -r * 2.4, Math.sin(ph) * r * 0.3, r * 0.07, P.dark);
+  if (o.detail) markings(ctx, 2, r * 0.8, span * 0.8, "rgba(255,255,255,.22)");
+  eye(ctx, r * 0.45, -r * 0.22, r * 0.07, false); eye(ctx, r * 0.45, r * 0.22, r * 0.07, false);
+};
+D.snake = (ctx, r, g, P, ph, o) => {
+  const n = 12; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  const pts = []; for (let k = 0; k < n; k++) pts.push([r * 1.1 - k * r * 0.38, Math.sin(ph * 1.2 - k * 0.65) * r * 0.55]);
+  ctx.strokeStyle = P.dark; ctx.lineWidth = r * 0.42; ctx.beginPath(); pts.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+  ctx.strokeStyle = P.base; ctx.lineWidth = r * 0.32; ctx.stroke();
+  if (o.detail) for (let k = 1; k < n - 1; k += 2) ell(ctx, pts[k][0], pts[k][1], r * 0.12, r * 0.1, 0, P.deep);
+  ell(ctx, r * 1.25, pts[0][1], r * 0.32, r * 0.24, 0, P.base);
+  if (Math.sin(ph * 0.7) > 0.6) line(ctx, r * 1.5, pts[0][1], r * 1.85, pts[0][1], r * 0.05, "#c8324b");
+  eye(ctx, r * 1.35, pts[0][1] - r * 0.13, r * 0.06, false); eye(ctx, r * 1.35, pts[0][1] + r * 0.13, r * 0.06, false);
+};
+function arachnid(ctx, r, P, ph, sting) {
+  ctx.lineCap = "round";
+  for (const side of [-1, 1]) for (let k = 0; k < 4; k++) {
+    const x = r * (0.35 - k * 0.22), sw = Math.sin(ph * 3 + k * 1.3 + (side > 0 ? 0 : 1.5)) * r * 0.15;
+    ctx.strokeStyle = P.deep; ctx.lineWidth = r * 0.07; ctx.beginPath(); ctx.moveTo(x, side * r * 0.2);
+    ctx.quadraticCurveTo(x + r * 0.1, side * r * 0.85, x + sw - r * 0.15 + (k - 1.5) * r * 0.15, side * r * 1.25); ctx.stroke();
+  }
+  if (sting) {
+    for (let k = 0; k < 5; k++) ell(ctx, -r * (0.6 + k * 0.28), Math.sin(ph + k * 0.4) * r * 0.05 * k, r * (0.2 - k * 0.02), r * (0.18 - k * 0.02), 0, P.base);
+    ell(ctx, -r * 1.85, 0, r * 0.12, r * 0.12, 0, P.deep);
+    for (const side of [-1, 1]) { line(ctx, r * 0.4, side * r * 0.2, r * 0.85, side * r * 0.6, r * 0.09, P.dark); ell(ctx, r * 1.0, side * r * 0.62, r * 0.22, r * 0.12, side * 0.4, P.base); }
+    ell(ctx, 0, 0, r * 0.55, r * 0.35, 0, P.base);
+  } else {
+    ell(ctx, -r * 0.45, 0, r * 0.6, r * 0.52, 0, P.base);
+    ell(ctx, -r * 0.5, 0, r * 0.25, r * 0.12, 0, P.light);
+    ell(ctx, r * 0.25, 0, r * 0.32, r * 0.28, 0, P.dark);
+  }
+  for (const side of [-1, 1]) ell(ctx, r * 0.45, side * r * 0.08, r * 0.05, r * 0.05, 0, "#e9e4d8");
+}
+D.spider = (ctx, r, g, P, ph) => arachnid(ctx, r, P, ph, false);
+D.scorpion = (ctx, r, g, P, ph) => arachnid(ctx, r, P, ph, true);
+D.snail = (ctx, r, g, P, ph) => {
+  const s = Math.sin(ph * 0.5) * r * 0.05;
+  ell(ctx, r * 0.1 + s, 0, r * 1.25, r * 0.35, 0, "#b9a58a");
+  line(ctx, r * 1.2, -r * 0.12, r * 1.55, -r * 0.3, r * 0.06, "#8f7d64"); line(ctx, r * 1.2, r * 0.12, r * 1.55, r * 0.3, r * 0.06, "#8f7d64");
+  ell(ctx, -r * 0.15, 0, r * 0.8, r * 0.75, 0, P.base);
+  ctx.strokeStyle = P.deep; ctx.lineWidth = r * 0.1; ctx.beginPath();
+  for (let k = 0; k < 40; k++) { const a = k * 0.32, rr = r * 0.72 * (1 - k / 44); ctx.lineTo(-r * 0.15 + Math.cos(a) * rr, Math.sin(a) * rr); } ctx.stroke();
+};
+D.giraffe = (ctx, r, g, P, ph, o) => {
+  const len = r * 0.95, wid = r * 0.5;
+  quadruped(ctx, r, P, ph * 1.5, o, len, wid, { legW: r * 0.12, reach: 1.2, pattern: 2, markCol: "rgba(95,45,15,.6)", tail: () => line(ctx, -len, 0, -len * 1.4, Math.sin(ph) * r * 0.15, r * 0.05, P.deep) });
+  const hx = len * 1.9, hy = Math.sin(ph * 0.4) * r * 0.15;
+  ctx.strokeStyle = P.base; ctx.lineWidth = r * 0.26; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(len * 0.6, 0); ctx.lineTo(hx, hy); ctx.stroke();
+  for (let k = 1; k < 4; k++) ell(ctx, len * 0.6 + (hx - len * 0.6) * k / 4, hy * k / 4, r * 0.08, r * 0.08, 0, "rgba(95,45,15,.6)");
+  ell(ctx, hx + r * 0.2, hy, r * 0.32, r * 0.17, 0, P.base);
+  line(ctx, hx, hy - r * 0.1, hx - r * 0.12, hy - r * 0.25, r * 0.06, P.deep); line(ctx, hx, hy + r * 0.1, hx - r * 0.12, hy + r * 0.25, r * 0.06, P.deep);
+};
+D.penguin = (ctx, r, g, P, ph, o) => {
+  const s = Math.sin(ph * 2) * 0.25;
+  ell(ctx, 0, -r * 0.55, r * 0.45, r * 0.13, 0.4 + s, P.base); ell(ctx, 0, r * 0.55, r * 0.45, r * 0.13, -0.4 - s, P.base);
+  ell(ctx, 0, 0, r * 0.8, r * 0.55, 0, P.base);
+  ell(ctx, r * 0.05, 0, r * 0.55, r * 0.32, 0, "#f3f1ea");
+  ell(ctx, r * 0.6, 0, r * 0.3, r * 0.28, 0, P.base);
+  ell(ctx, r * 0.55, -r * 0.2, r * 0.1, r * 0.06, 0, "#f2b134"); ell(ctx, r * 0.55, r * 0.2, r * 0.1, r * 0.06, 0, "#f2b134");
+  ctx.fillStyle = "#e89b2c"; ctx.beginPath(); ctx.moveTo(r * 0.85, -r * 0.06); ctx.lineTo(r * 1.1, 0); ctx.lineTo(r * 0.85, r * 0.06); ctx.fill();
+};
+D.seal = (ctx, r, g, P, ph, o) => {
+  const s = Math.sin(ph * 1.3);
+  ell(ctx, -r * 1.25, s * r * 0.15 - r * 0.2, r * 0.35, r * 0.12, 0.5, P.dark); ell(ctx, -r * 1.25, s * r * 0.15 + r * 0.2, r * 0.35, r * 0.12, -0.5, P.dark);
+  ell(ctx, r * 0.35, -r * 0.5, r * 0.32, r * 0.12, -0.8, P.dark); ell(ctx, r * 0.35, r * 0.5, r * 0.32, r * 0.12, 0.8, P.dark);
+  ctx.fillStyle = P.base; ctx.beginPath(); ctx.moveTo(r * 1.0, 0); ctx.bezierCurveTo(r * 0.9, -r * 0.65, -r * 0.6, -r * 0.6, -r * 1.15, s * r * 0.15); ctx.bezierCurveTo(-r * 0.6, r * 0.6, r * 0.9, r * 0.65, r * 1.0, 0); ctx.fill();
+  if (o.detail) markings(ctx, 2, r * 0.9, r * 0.5, "rgba(0,0,0,.18)");
+  ell(ctx, r * 1.0, 0, r * 0.34, r * 0.3, 0, P.base); ell(ctx, r * 1.3, 0, r * 0.07, r * 0.07, 0, "#151515");
+  eye(ctx, r * 1.12, -r * 0.15, r * 0.07, false); eye(ctx, r * 1.12, r * 0.15, r * 0.07, false);
+};
+// close relatives drawn with the nearest existing art from above
+D.salamander = D.lizard; D.stego = D.ceratops; D.pterosaur = D.raptor; D.bat = D.raptor; D.parrot = D.bird; D.wader = D.bird; D.ratite = D.bird;
+D.rabbit = D.rodent; D.boar = D.bovid; D.horse = D.deer; D.camel = D.bovid; D.rhino = D.bovid; D.mammoth = D.elephant; D.fox = D.wolf;
+D.monkey = D.ape; D.hippo = D.bovid; D.capybara = D.rodent; D.dolphin = D.shark;
+
 export const DRAW = D;
 
 /** Low-detail silhouette for far zoom: body + head blob, cheap but recognisable by colour and shape. */
 export function drawSimple(ctx, r, arch, P) {
   ctx.fillStyle = P.base;
   ctx.beginPath();
-  if (arch === "shark" || arch === "whale" || arch === "fish" || arch === "predfish" || arch === "croc" || arch === "lizard" || arch === "squid") ctx.ellipse(0, 0, r * 1.5, r * 0.6, 0, 0, TAU);
-  else if (arch === "bird" || arch === "raptor") { ctx.moveTo(r * 0.8, 0); ctx.lineTo(-r * 0.6, -r * 1.4); ctx.lineTo(-r * 0.2, 0); ctx.lineTo(-r * 0.6, r * 1.4); }
+  if (arch === "shark" || arch === "whale" || arch === "dolphin" || arch === "eel" || arch === "snake" || arch === "fish" || arch === "predfish" || arch === "croc" || arch === "lizard" || arch === "squid") ctx.ellipse(0, 0, r * 1.5, r * 0.6, 0, 0, TAU);
+  else if (arch === "bird" || arch === "raptor" || arch === "parrot" || arch === "bat" || arch === "pterosaur") { ctx.moveTo(r * 0.8, 0); ctx.lineTo(-r * 0.6, -r * 1.4); ctx.lineTo(-r * 0.2, 0); ctx.lineTo(-r * 0.6, r * 1.4); }
   else ctx.ellipse(0, 0, r * 1.1, r * 0.8, 0, 0, TAU);
   ctx.fill();
 }
 
 /** Things that are drawn with a ground shadow and the height (in r) they float above it. */
-export const SHADOW = { frog: 0.15, croc: 0.12, turtle: 0.12, insect: 0.1, flyinsect: 1.6, lizard: 0.12, ceratops: 0.2, sauropod: 0.25, theropod: 0.25, bird: 1.8, raptor: 2.2, rodent: 0.12, deer: 0.2, bovid: 0.2, elephant: 0.25, wolf: 0.2, bigcat: 0.2, bear: 0.2, ape: 0.15, human: 0.15 };
+export const SHADOW = { capybara: 0.12, salamander: 0.12, seal: 0.12, hippo: 0.2, penguin: 0.15, spider: 0.08, scorpion: 0.08, snail: 0.08, snake: 0.06, stego: 0.22, pterosaur: 2.2, parrot: 1.8, wader: 0.25, ratite: 0.25, bat: 1.6, rabbit: 0.12, boar: 0.18, horse: 0.22, camel: 0.22, giraffe: 0.3, rhino: 0.2, mammoth: 0.25, fox: 0.18, monkey: 0.15, frog: 0.15, croc: 0.12, turtle: 0.12, insect: 0.1, flyinsect: 1.6, lizard: 0.12, ceratops: 0.2, sauropod: 0.25, theropod: 0.25, bird: 1.8, raptor: 2.2, rodent: 0.12, deer: 0.2, bovid: 0.2, elephant: 0.25, wolf: 0.2, bigcat: 0.2, bear: 0.2, ape: 0.15, human: 0.15 };

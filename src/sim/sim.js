@@ -1,7 +1,7 @@
 // Agent-based ecosystem: every organism is an individual that moves, senses, eats, flees,
 // reproduces with mutation and dies. Species emerge from genetic divergence.
 import { GENES, GENE_KEYS, GENE_DEFAULTS, mutateGenes, clampGenes, geneDistance, blendGenes, roleOf, speciesName, describeSpecies, tierOf, gauss } from "./genes.js";
-import { ARCH, ARCH_KEYS, TEMPLATES, archetypeOf, genusFor } from "./archetypes.js";
+import { ARCH, ARCH_KEYS, TEMPLATES, archetypeOf, genusFor, affinityOf } from "./archetypes.js";
 import { World, WORLD_W, WORLD_H, CELL, GW, GH } from "./world.js";
 import { capsFor } from "./eras.js";
 import { civStep, nearestSettlement } from "./civ.js";
@@ -17,6 +17,9 @@ const TAU = Math.PI * 2;
 const MODE = { WANDER: 0, GRAZE: 1, HUNT: 2, FLEE: 3, MIGRATE: 4 };
 export { MODE };
 export const MODE_TH = ["สำรวจ", "หาอาหาร", "ไล่ล่า", "หลบหนี", "อพยพ"];
+
+export const CROWD = { at: 0.2, k: 2.4 };
+export const NICHE_EVERY = { t: 450 };
 
 export class Simulation {
   constructor(seed) {
@@ -128,6 +131,12 @@ export class Simulation {
     if (c.tool > 1) c.base *= 0.75; // cooperation and shelter: tool users waste less energy
   }
 
+  /** Biome affinity of a creature's body plan (cached per creature until its body plan changes). */
+  aff(c) {
+    const arch = this.species.get(c.sp)?.arch;
+    if (c._affA !== arch || !c._aff) { c._aff = affinityOf(arch); c._affA = arch; }
+    return c._aff;
+  }
   suit(g, i) {
     const h = g.habitat;
     if (this.world.isWater(i)) {
@@ -227,7 +236,7 @@ export class Simulation {
       if (b > 0.01) {
         const bite = Math.min(b, 0.016 * (0.3 + g.size * 0.9) * (c.mode === MODE.GRAZE ? 1 : 0.35));
         w.bio[i] = b - bite;
-        const gain = bite * PLANT_E * c.veg * c.digest;
+        const gain = bite * PLANT_E * c.veg * c.digest * this.aff(c)[w.biome[i]];
         c.e = Math.min(c.maxE, c.e + gain);
         this.out.energy += gain;
       }
@@ -297,13 +306,14 @@ export class Simulation {
     if (hungry) {
       // forage: sample a few spots and move to the richest suitable one
       const here = w.idx(c.x, c.y);
-      let best = w.bio[here] * this.suit(g, here) * 1.15, bx2 = c.x, by2 = c.y;
-      const samples = 3 + Math.round(g.intellect * 6 + g.sense / 60);
+      const af = this.aff(c);
+      let best = w.bio[here] * this.suit(g, here) * af[w.biome[here]] * 1.15, bx2 = c.x, by2 = c.y;
+      const samples = 3 + Math.round(Math.min(g.intellect, 0.25) * 8 + g.sense / 60); // smarter foraging saturates, so wild brains don't run away
       for (let k = 0; k < samples; k++) {
         const a = Math.random() * TAU, d = Math.random() * range;
         const sx = c.x + Math.cos(a) * d, sy = c.y + Math.sin(a) * d;
         if (sx < 0 || sy < 0 || sx >= WORLD_W || sy >= WORLD_H) continue;
-        const si = w.idx(sx, sy), sc = w.bio[si] * this.suit(g, si) - d * 0.0012;
+        const si = w.idx(sx, sy), sc = w.bio[si] * this.suit(g, si) * af[w.biome[si]] - d * 0.0012;
         if (sc > best) { best = sc; bx2 = sx; by2 = sy; }
       }
       if (best > 0.04) { c.mode = MODE.GRAZE; c.tx = bx2; c.ty = by2; c.prey = null; return; }
@@ -325,6 +335,12 @@ export class Simulation {
     const g = c.g;
     // once towns exist, people mostly have children inside settlements rather than in the wild
     if (this.species.get(c.sp)?.sapient && (this.wildSapient || 0) > 40 + this.settlements.length * 3) { c.cd = 200; return; }
+    // "kill the winner": a body plan that crowds out everything else suffers more parasites and disease
+    const spc = this.species.get(c.sp), st = this.stats;
+    if (spc && !spc.sapient && st && st.n > 120) {
+      const crowd = (st.arch?.[spc.arch] || 0) / st.n - CROWD.at;
+      if (crowd > 0 && Math.random() < crowd * CROWD.k) { c.cd = 90; c.e *= 0.85; return; }
+    }
     const kids = g.fertility > 0.72 && g.size < 1.6 ? 2 : 1;
     const share = (c.e * 0.42 * P.offspring) / kids;
     c.e *= 0.5;
@@ -523,7 +539,7 @@ export class Simulation {
       if (sea < 25) this.reseedOcean();
     }
     if (this.era >= 4 && !this.settlements.length && this.tick - (this.lastProto || 0) > 4500 && ![...this.species.values()].some((s) => s.extinct === null && s.count > 0 && (s.proto || s.sapient))) this.spawnProto();
-    if (this.era >= 1 && n > 50 && this.tick - (this.lastNiche || 0) > 1200) this.fillNiche();
+    if (this.era >= 1 && n > 50 && this.tick - (this.lastNiche || 0) > NICHE_EVERY.t) this.fillNiche();
     if (n > 0 && this.era >= 1 && roles[2] + roles[1] < Math.max(4, n * 0.015) && this.tick - (this.lastPredatorSpawn || 0) > 4000) this.spawnPredators();
   }
 
@@ -535,12 +551,14 @@ export class Simulation {
     const open = ARCH_KEYS.filter((k) => TEMPLATES[k] && ARCH[k].era <= this.era && !(counts[k] > 0) && this.tick - (this.nicheTried[k] ?? -1e9) > 8000);
     for (let s = open.length - 1; s > 0; s--) { const j = (Math.random() * (s + 1)) | 0; [open[s], open[j]] = [open[j], open[s]]; }
     for (const k of open) {
-      const where = ARCH[k].habitat;
+      const where = ARCH[k].habitat, temp = ARCH[k].temp;
       const pool = this.creatures.filter((c) => {
         if (c.dead) return false;
         const sp = this.species.get(c.sp);
         if (sp?.sapient || sp?.proto) return false;
-        const water = w.isWater(w.idx(c.x, c.y));
+        const i = w.idx(c.x, c.y), water = w.isWater(i);
+        if (temp === "cold" && w.temp[i] > 0.38) return false;
+        if (temp === "hot" && w.temp[i] < 0.62) return false;
         return where === "water" ? water && c.g.form >= 0.3 : where === "land" ? !water && c.g.habitat >= 0.6 : water ? this.nearLand(c) : w.coast[w.idx(c.x, c.y)];
       });
       if (pool.length < 8) continue;
