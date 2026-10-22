@@ -6,3 +6,5 @@ Thumbs.db
 .env
 *.png
 !assets/**/*.png
+node_modules/
+dist/

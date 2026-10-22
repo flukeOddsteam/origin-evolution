@@ -16,6 +16,21 @@ python3 -m http.server 8000
 
 หรือ `npx serve .`
 
+## เผยแพร่เป็นเว็บให้คนอื่นเล่น
+
+```bash
+npm install
+npm run build        # ได้โฟลเดอร์ dist/
+```
+
+- `dist/` คือเว็บ static พร้อมอัปโหลด (index.html, game.js, styles.css, three.min.js) ไม่ต้องมีเซิร์ฟเวอร์หลังบ้าน และไม่พึ่ง CDN
+  - **Netlify Drop**: ลากโฟลเดอร์ `dist` ไปวางที่ app.netlify.com/drop
+  - **GitHub Pages**: push เนื้อหาใน `dist/` ขึ้น branch `gh-pages` แล้วเปิด Pages ใน Settings
+  - **Cloudflare Pages / Vercel / itch.io (HTML5)**: อัปโหลดโฟลเดอร์หรือ zip ของ `dist/`
+- `dist/origin-single.html` คือทั้งเกมในไฟล์เดียว ส่งให้เพื่อนแล้วดับเบิลคลิกเปิดได้เลย
+- เซฟของผู้เล่นแต่ละคนเก็บในเบราว์เซอร์ของเขาเอง
+- `npm run preview` สร้างแล้วเปิดดูที่ http://localhost:8000
+
 ## ใหม่ในเวอร์ชัน 0.6
 
 - หน้าตาแบบเกม [Evolve](https://github.com/pmotschmann/Evolve): ทรัพยากรด้านซ้าย แท็บตรงกลาง บันทึกเหตุการณ์ด้านขวา ปุ่มและ tooltip แบบ Evolve
@@ -92,6 +107,8 @@ ORIGIN-Evolution-Idle/
 │   ├── main.js        # UI, game loop, input
 │   └── styles.css
 ├── tools/headless.mjs # รันระบบจำลองใน Node เพื่อตรวจสมดุล
+├── tools/build.mjs    # สร้างเว็บ static ลง dist/ (npm run build)
+├── vendor/three.min.js # Three.js r128 (MIT) สำหรับเวอร์ชัน static
 ├── docs/GAME_DESIGN.md
 └── CHANGELOG.md
 ```
